@@ -1,38 +1,48 @@
 #pragma once
 
 // Dutch labels of the family screen, in one place.
-// Strings drawn in family_font_28 must stay inside 0x20-0x7F and 0xA0-0x17F (no "…").
+// The family fonts cover 0x20-0x7F, 0xA0-0x17F and "…" (see scripts/gen-family-assets.py in the parent repo).
+// Rows, bars and chips are upper case, in the voice of the VOXL logo; message text is left as written.
 
 #if defined(FAMILY_UI) && defined(VIEW_320x240)
 
-// home rows (family_font_28)
-#define FAMILY_STR_MESSAGES "Berichten (%u)"
-#define FAMILY_STR_MESSAGES_LOADING "Berichten..."
-#define FAMILY_STR_READ "Lezen"
-#define FAMILY_STR_SEND "Bericht sturen"
+// home rows (family_font_28) and the unread badge
+#define FAMILY_STR_MESSAGES "BERICHTEN"
+#define FAMILY_STR_COUNT "%u"
+#define FAMILY_STR_COUNT_LOADING "…"
+#define FAMILY_STR_READ "LEZEN"
+#define FAMILY_STR_SEND "BERICHT STUREN"
 
-// read (montserrat 16/20)
-#define FAMILY_STR_READ_HINT "Rol om te lezen. Druk om terug te gaan."
+// read (family_font_16 bar and headers, family_font_20 text)
+#define FAMILY_STR_READ_TITLE "LEZEN"
+#define FAMILY_STR_READ_POSITION "%d / %d"
 #define FAMILY_STR_LOADING "Berichten laden…"
 #define FAMILY_STR_NO_MESSAGES "Nog geen berichten."
-#define FAMILY_STR_ME "Ik"
-#define FAMILY_STR_PRIVATE "privé"
-#define FAMILY_STR_SENT "Verstuurd"
-#define FAMILY_STR_NOT_SENT "Niet verstuurd"
-#define FAMILY_STR_JUST_NOW "zojuist"
-#define FAMILY_STR_MINUTES_AGO "%u min geleden"
-#define FAMILY_STR_HOURS_AGO "%u uur geleden"
-#define FAMILY_STR_DAYS_AGO "%u dagen geleden"
+#define FAMILY_STR_ME "IK"
+#define FAMILY_STR_PRIVATE "PRIVÉ"
+#define FAMILY_STR_SENT "VERSTUURD"
+#define FAMILY_STR_NOT_SENT "NIET VERSTUURD"
+#define FAMILY_STR_JUST_NOW "ZOJUIST"
+#define FAMILY_STR_MINUTES_AGO "%u MIN GELEDEN"
+#define FAMILY_STR_HOURS_AGO "%u UUR GELEDEN"
+#define FAMILY_STR_DAYS_AGO "%u DAGEN GELEDEN"
 
-// send (montserrat 16/20)
-#define FAMILY_STR_SEND_TITLE "Bericht aan iedereen"
-#define FAMILY_STR_SEND_HINT "Enter of druk: versturen. Wis: terug."
+// send (family_font_16 bar, family_font_20 text, family_font_14 key hints)
+#define FAMILY_STR_SEND_TITLE "BERICHT AAN IEDEREEN"
+#define FAMILY_STR_KEY_SEND "ENTER"
+#define FAMILY_STR_HINT_SEND "VERSTUREN"
+#define FAMILY_STR_KEY_BACK "WIS"
+#define FAMILY_STR_HINT_BACK "TERUG"
+#define FAMILY_STR_KEY_PRESS "DRUK"
 
-// status line, mirrored from MUI alerts (montserrat 16)
-#define FAMILY_STR_ALERT_DISCONNECTED "Geen verbinding"
-#define FAMILY_STR_ALERT_CONNECTED "Verbonden"
-#define FAMILY_STR_ALERT_REBOOTING "Herstarten…"
-#define FAMILY_STR_ALERT_RESYNC "Bijwerken…"
-#define FAMILY_STR_ALERT_SHUTDOWN "Uitschakelen…"
+// status line, mirrored from MUI alerts (family_font_14 chip)
+#define FAMILY_STR_ALERT_DISCONNECTED "GEEN VERBINDING"
+#define FAMILY_STR_ALERT_CONNECTED "VERBONDEN"
+#define FAMILY_STR_ALERT_REBOOTING "HERSTARTEN…"
+#define FAMILY_STR_ALERT_RESYNC "BIJWERKEN…"
+#define FAMILY_STR_ALERT_SHUTDOWN "UITSCHAKELEN…"
+
+// MUI's top bar on the home panel: the VOXL wordmark, then this
+#define FAMILY_STR_BRAND_SUFFIX "net"
 
 #endif

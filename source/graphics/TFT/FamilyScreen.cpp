@@ -22,6 +22,10 @@
 extern fs::FS &persistentFS; // ViewController.cpp, the filesystem that holds /messages
 
 LV_FONT_DECLARE(family_font_28);
+LV_FONT_DECLARE(family_font_20);
+LV_FONT_DECLARE(family_font_16);
+LV_FONT_DECLARE(family_font_14);
+LV_IMAGE_DECLARE(family_wordmark_16);
 
 #define VALID_TIME(T) (T > 1000000 && T < UINT32_MAX)
 #define LV_COLOR_HEX(C)                                                                                                          \
@@ -38,16 +42,16 @@ constexpr uint32_t c_chordHoldMs = 1000;                 // trackball held befor
 constexpr uint32_t c_devModeIdleMs = FAMILY_DEV_IDLE_MS;
 constexpr uint32_t c_nodeLabelIdx = 2;                   // long name label in a MUI node panel (see addNode)
 
-constexpr lv_color_t colorBackground = LV_COLOR_HEX(0x000000);
-constexpr lv_color_t colorRow = LV_COLOR_HEX(0x202020);
-constexpr lv_color_t colorRowFocused = LV_COLOR_HEX(0x383838);
-constexpr lv_color_t colorOwnCard = LV_COLOR_HEX(0x123a5a);
-constexpr lv_color_t colorFocus = LV_COLOR_HEX(0xffd400);
-constexpr lv_color_t colorText = LV_COLOR_HEX(0xffffff);
-constexpr lv_color_t colorDimText = LV_COLOR_HEX(0x8c8c8c);
-constexpr lv_color_t colorSender = LV_COLOR_HEX(0x9fd3ff);
-constexpr lv_color_t colorOwnSender = LV_COLOR_HEX(0xa8f0a8);
-constexpr lv_color_t colorFailed = LV_COLOR_HEX(0xff6b6b);
+// the logo's palette: black, white, and two greys for what is switched off
+constexpr lv_color_t colorBlack = LV_COLOR_HEX(0x000000);
+constexpr lv_color_t colorWhite = LV_COLOR_HEX(0xffffff);
+// the display filter (FamilyTheme.cpp) crushes dark greys; these come out at about 0x46 and 0x80
+constexpr lv_color_t colorMuted = LV_COLOR_HEX(0x5c5c5c);     // frame of a disabled row
+constexpr lv_color_t colorMutedText = LV_COLOR_HEX(0x787878); // its text
+constexpr int32_t c_frame = 3;      // block frame width
+constexpr int32_t c_cut = 12;       // corner cut, along each edge
+constexpr int32_t c_gap = 6;        // page padding and spacing
+constexpr int32_t c_barHeight = 22; // bars and the status strip
 
 FamilyScreen *FamilyScreen::family = nullptr;
 
@@ -60,7 +64,8 @@ static bool chordLatched = false; // swallow the chord key until it is released
 static uint32_t escPressedAt = 0; // desktop stand-in for the held trackball: Esc, then P
 #endif
 
-static lv_style_t styleRow, styleRowFocused, styleRowDisabled, styleCard, styleOwnCard, styleCardFocused;
+static lv_style_t styleBlock, styleBlockFocused, styleBlockDisabled, styleCard, styleOwnCard, styleCardFocused,
+    styleOwnCardFocused, styleBar, styleChip;
 
 static uint32_t uptimeSeconds(void)
 {
@@ -93,11 +98,15 @@ void FamilyScreen::attach(TFTView_320x240 *view)
     family = new FamilyScreen(view);
     family->loadMarker();
     family->build();
+    family->installTheme();
     family->hookInput();
     family->mainScreenActive = lv_screen_active() == objects.main_screen;
     lv_obj_add_event_cb(objects.main_screen, ui_event_screen, LV_EVENT_SCREEN_LOAD_START, nullptr);
     lv_obj_add_event_cb(objects.main_screen, ui_event_screen, LV_EVENT_SCREEN_UNLOAD_START, nullptr);
     lv_timer_create(timer_tick, 1000, nullptr);
+#ifdef ARCH_PORTDUINO
+    family->startSim();
+#endif
     ILOG_INFO("family screen attached (channel %d)", FAMILY_CHANNEL);
 }
 
@@ -190,6 +199,7 @@ void FamilyScreen::alert(const char *text, bool show)
     FamilyScreen &f = *family;
     if (!show || !text) {
         lv_label_set_text(f.alertLabel, "");
+        lv_obj_add_flag(f.alertChip, LV_OBJ_FLAG_HIDDEN);
         f.alertHideAt = 0;
         return;
     }
@@ -208,6 +218,7 @@ void FamilyScreen::alert(const char *text, bool show)
         shown = FAMILY_STR_ALERT_SHUTDOWN;
     }
     lv_label_set_text(f.alertLabel, shown);
+    lv_obj_clear_flag(f.alertChip, LV_OBJ_FLAG_HIDDEN);
 }
 
 // ===== model =====
@@ -342,11 +353,13 @@ static lv_obj_t *createPlain(lv_obj_t *parent)
     return obj;
 }
 
-static lv_obj_t *createLabel(lv_obj_t *parent, const lv_font_t *font, lv_color_t color, const char *text)
+/**
+ * A label that takes its colour from its parent, so an inverted (focused) block turns its text black.
+ */
+static lv_obj_t *createLabel(lv_obj_t *parent, const lv_font_t *font, const char *text)
 {
     lv_obj_t *label = lv_label_create(parent);
     lv_obj_set_style_text_font(label, font, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_color(label, color, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_label_set_text(label, text);
     return label;
 }
@@ -356,46 +369,145 @@ static lv_obj_t *createPage(lv_obj_t *parent)
     lv_obj_t *page = createPlain(parent);
     lv_obj_set_size(page, lv_pct(100), lv_pct(100));
     lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_all(page, 4, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_row(page, 4, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_all(page, c_gap, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_row(page, c_gap, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_add_flag(page, LV_OBJ_FLAG_HIDDEN);
     return page;
 }
 
+/**
+ * Inverted bar, like the NETWORK block of the logo: white, bold black title left, a label right.
+ * Returns the right-hand label.
+ */
+static lv_obj_t *createBar(lv_obj_t *parent, const char *title)
+{
+    lv_obj_t *bar = createPlain(parent);
+    lv_obj_set_size(bar, lv_pct(100), c_barHeight);
+    lv_obj_add_style(bar, &styleBar, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_t *left = createLabel(bar, &family_font_16, title);
+    lv_obj_set_align(left, LV_ALIGN_LEFT_MID);
+    lv_obj_t *right = createLabel(bar, &family_font_14, "");
+    lv_obj_set_align(right, LV_ALIGN_RIGHT_MID);
+    return right;
+}
+
+/**
+ * A small inverted key cap: [ENTER].
+ */
+static lv_obj_t *createChip(lv_obj_t *parent, const char *text)
+{
+    lv_obj_t *chip = createPlain(parent);
+    lv_obj_set_size(chip, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_add_style(chip, &styleChip, LV_PART_MAIN | LV_STATE_DEFAULT);
+    createLabel(chip, &family_font_14, text);
+    return chip;
+}
+
+/**
+ * Cut the bottom-right corner at 45 degrees, the angle of the logo's letters. Runs after the block
+ * and its children are drawn: a border-coloured band along the cut, then the cut itself in black.
+ */
+static void ui_event_chamfer(lv_event_t *e)
+{
+    lv_obj_t *obj = (lv_obj_t *)lv_event_get_current_target(e);
+    lv_layer_t *layer = lv_event_get_layer(e);
+    lv_area_t a;
+    lv_obj_get_coords(obj, &a);
+    const int32_t x = a.x2 + 1, y = a.y2 + 1, c = c_cut;
+
+    int32_t w = lv_obj_get_style_border_width(obj, LV_PART_MAIN);
+    if (w > 0 && lv_obj_get_style_border_side(obj, LV_PART_MAIN) == LV_BORDER_SIDE_FULL) {
+        int32_t s = w * 3 / 2; // the band's width measured along the edges (w * sqrt 2)
+        lv_draw_triangle_dsc_t band;
+        lv_draw_triangle_dsc_init(&band);
+        band.color = lv_obj_get_style_border_color(obj, LV_PART_MAIN);
+        band.opa = LV_OPA_COVER;
+        band.p[0] = {x - c - s, y};
+        band.p[1] = {x - c, y};
+        band.p[2] = {x, y - c - s};
+        lv_draw_triangle(layer, &band);
+        band.p[0] = {x - c, y};
+        band.p[1] = {x, y - c};
+        band.p[2] = {x, y - c - s};
+        lv_draw_triangle(layer, &band);
+    }
+    lv_draw_triangle_dsc_t cut;
+    lv_draw_triangle_dsc_init(&cut);
+    cut.color = colorBlack;
+    cut.opa = LV_OPA_COVER;
+    cut.p[0] = {x - c, y};
+    cut.p[1] = {x, y - c};
+    cut.p[2] = {x, y};
+    lv_draw_triangle(layer, &cut);
+}
+
+static void chamfer(lv_obj_t *obj)
+{
+    lv_obj_add_event_cb(obj, ui_event_chamfer, LV_EVENT_DRAW_POST, nullptr);
+}
+
 void FamilyScreen::build(void)
 {
-    lv_style_init(&styleRow);
-    lv_style_set_bg_opa(&styleRow, LV_OPA_COVER);
-    lv_style_set_bg_color(&styleRow, colorRow);
-    lv_style_set_radius(&styleRow, 8);
-    lv_style_set_border_width(&styleRow, 4);
-    lv_style_set_border_color(&styleRow, colorRow);
-    lv_style_set_pad_left(&styleRow, 14);
-    lv_style_set_pad_right(&styleRow, 10);
-    lv_style_set_text_color(&styleRow, colorText);
+    // blocks: rows and the send box. Black, thick white frame, square; focused rows invert
+    lv_style_init(&styleBlock);
+    lv_style_set_bg_opa(&styleBlock, LV_OPA_COVER);
+    lv_style_set_bg_color(&styleBlock, colorBlack);
+    lv_style_set_radius(&styleBlock, 0);
+    lv_style_set_border_width(&styleBlock, c_frame);
+    lv_style_set_border_color(&styleBlock, colorWhite);
+    lv_style_set_pad_left(&styleBlock, 14);
+    lv_style_set_pad_right(&styleBlock, 10);
+    lv_style_set_text_color(&styleBlock, colorWhite);
 
-    lv_style_init(&styleRowFocused);
-    lv_style_set_bg_color(&styleRowFocused, colorRowFocused);
-    lv_style_set_border_color(&styleRowFocused, colorFocus);
+    lv_style_init(&styleBlockFocused);
+    lv_style_set_bg_color(&styleBlockFocused, colorWhite);
+    lv_style_set_text_color(&styleBlockFocused, colorBlack);
 
-    lv_style_init(&styleRowDisabled);
-    lv_style_set_text_color(&styleRowDisabled, colorDimText);
+    lv_style_init(&styleBlockDisabled);
+    lv_style_set_border_color(&styleBlockDisabled, colorMuted);
+    lv_style_set_text_color(&styleBlockDisabled, colorMutedText);
 
+    // cards: a white rule on the sender's side; the focused card becomes a white block
     lv_style_init(&styleCard);
     lv_style_set_bg_opa(&styleCard, LV_OPA_COVER);
-    lv_style_set_bg_color(&styleCard, colorRow);
-    lv_style_set_radius(&styleCard, 6);
+    lv_style_set_bg_color(&styleCard, colorBlack);
+    lv_style_set_radius(&styleCard, 0);
     lv_style_set_border_width(&styleCard, 4);
-    lv_style_set_border_color(&styleCard, colorRow);
-    lv_style_set_pad_all(&styleCard, 6);
-    lv_style_set_pad_row(&styleCard, 2);
+    lv_style_set_border_color(&styleCard, colorWhite);
+    lv_style_set_border_side(&styleCard, LV_BORDER_SIDE_LEFT);
+    lv_style_set_pad_top(&styleCard, 5);
+    lv_style_set_pad_bottom(&styleCard, 7);
+    lv_style_set_pad_hor(&styleCard, 10);
+    lv_style_set_pad_row(&styleCard, 1);
+    lv_style_set_text_color(&styleCard, colorWhite);
 
     lv_style_init(&styleOwnCard);
-    lv_style_set_bg_color(&styleOwnCard, colorOwnCard);
-    lv_style_set_border_color(&styleOwnCard, colorOwnCard);
+    lv_style_set_border_side(&styleOwnCard, LV_BORDER_SIDE_RIGHT);
 
+    // a focused card gains a frame on all sides; trim the padding so the text keeps its width and
+    // does not rewrap under the reader's eyes
     lv_style_init(&styleCardFocused);
-    lv_style_set_border_color(&styleCardFocused, colorFocus);
+    lv_style_set_bg_color(&styleCardFocused, colorWhite);
+    lv_style_set_text_color(&styleCardFocused, colorBlack);
+    lv_style_set_border_side(&styleCardFocused, LV_BORDER_SIDE_FULL);
+    lv_style_set_pad_right(&styleCardFocused, 6);
+
+    lv_style_init(&styleOwnCardFocused);
+    lv_style_set_pad_left(&styleOwnCardFocused, 6);
+    lv_style_set_pad_right(&styleOwnCardFocused, 10);
+
+    lv_style_init(&styleBar);
+    lv_style_set_bg_opa(&styleBar, LV_OPA_COVER);
+    lv_style_set_bg_color(&styleBar, colorWhite);
+    lv_style_set_text_color(&styleBar, colorBlack);
+    lv_style_set_pad_hor(&styleBar, 6);
+
+    lv_style_init(&styleChip);
+    lv_style_set_bg_opa(&styleChip, LV_OPA_COVER);
+    lv_style_set_bg_color(&styleChip, colorWhite);
+    lv_style_set_text_color(&styleChip, colorBlack);
+    lv_style_set_pad_hor(&styleChip, 4);
+    lv_style_set_pad_ver(&styleChip, 1);
 
     group = lv_group_create();
     lv_group_set_wrap(group, false);
@@ -404,8 +516,8 @@ void FamilyScreen::build(void)
     lv_obj_set_size(root, lv_pct(100), lv_pct(100));
     lv_obj_set_pos(root, 0, 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_bg_color(root, colorBackground, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_color(root, colorText, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(root, colorBlack, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(root, colorWhite, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_add_flag(root, LV_OBJ_FLAG_CLICKABLE); // swallow pointer input meant for MUI underneath
     lv_obj_add_flag(root, LV_OBJ_FLAG_HIDDEN);
 
@@ -418,87 +530,132 @@ void FamilyScreen::buildHome(void)
 {
     homePage = createPage(root);
 
-    // status strip: clock, MUI alert, battery
+    // status strip: wordmark, MUI alert, clock and battery
     lv_obj_t *strip = createPlain(homePage);
-    lv_obj_set_size(strip, lv_pct(100), 20);
-    lv_obj_set_style_pad_hor(strip, 4, LV_PART_MAIN | LV_STATE_DEFAULT);
-    clockLabel = createLabel(strip, &ui_font_montserrat_16, colorDimText, "");
-    lv_obj_set_align(clockLabel, LV_ALIGN_LEFT_MID);
-    alertLabel = createLabel(strip, &ui_font_montserrat_16, colorFocus, "");
-    lv_obj_set_align(alertLabel, LV_ALIGN_CENTER);
-    batteryLabel = createLabel(strip, &ui_font_montserrat_16, colorDimText, "");
-    lv_obj_set_align(batteryLabel, LV_ALIGN_RIGHT_MID);
+    lv_obj_set_size(strip, lv_pct(100), c_barHeight);
+    lv_obj_t *mark = lv_image_create(strip);
+    lv_image_set_src(mark, &family_wordmark_16);
+    lv_obj_set_align(mark, LV_ALIGN_LEFT_MID);
+    alertChip = createChip(strip, "");
+    alertLabel = lv_obj_get_child(alertChip, 0);
+    lv_obj_set_align(alertChip, LV_ALIGN_CENTER);
+    lv_obj_add_flag(alertChip, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_t *status = createPlain(strip);
+    lv_obj_set_size(status, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_align(status, LV_ALIGN_RIGHT_MID);
+    lv_obj_set_flex_flow(status, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(status, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(status, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
+    batteryLabel = createLabel(status, &family_font_14, "");
+    clockLabel = createLabel(status, &family_font_16, "");
 
-    static const char *text[3] = {FAMILY_STR_MESSAGES_LOADING, FAMILY_STR_READ, FAMILY_STR_SEND};
+    static const char *text[3] = {FAMILY_STR_MESSAGES, FAMILY_STR_READ, FAMILY_STR_SEND};
     for (int i = 0; i < 3; i++) {
         lv_obj_t *row = createPlain(homePage);
         lv_obj_set_width(row, lv_pct(100));
         lv_obj_set_flex_grow(row, 1);
-        lv_obj_add_style(row, &styleRow, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_add_style(row, &styleRowFocused, LV_PART_MAIN | LV_STATE_FOCUSED);
-        lv_obj_add_style(row, &styleRowDisabled, LV_PART_MAIN | LV_STATE_DISABLED);
+        lv_obj_add_style(row, &styleBlock, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_add_style(row, &styleBlockFocused, LV_PART_MAIN | LV_STATE_FOCUSED);
+        lv_obj_add_style(row, &styleBlockDisabled, LV_PART_MAIN | LV_STATE_DISABLED);
         lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(row, ui_event_row, LV_EVENT_ALL, (void *)(intptr_t)i);
+        chamfer(row);
         rows[i] = row;
 
-        rowLabels[i] = lv_label_create(row);
-        lv_obj_set_style_text_font(rowLabels[i], &family_font_28, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_label_set_text(rowLabels[i], text[i]);
+        rowLabels[i] = createLabel(row, &family_font_28, text[i]);
         lv_obj_set_align(rowLabels[i], LV_ALIGN_LEFT_MID);
     }
     lv_obj_add_state(rows[0], LV_STATE_DISABLED);
+
+    // the unread count, a solid block at the end of row 1
+    badge = createPlain(rows[0]);
+    lv_obj_set_size(badge, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_min_width(badge, 44, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_hor(badge, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_ver(badge, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(badge, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_align(badge, LV_ALIGN_RIGHT_MID);
+    badgeLabel = createLabel(badge, &family_font_28, FAMILY_STR_COUNT_LOADING);
+    lv_obj_set_align(badgeLabel, LV_ALIGN_CENTER);
+    styleBadge();
+}
+
+/**
+ * The badge inverts against its row: a white block on a black row, a black block on a focused (white)
+ * row, and only a muted frame while there is nothing unread.
+ */
+void FamilyScreen::styleBadge(void)
+{
+    bool disabled = lv_obj_has_state(rows[0], LV_STATE_DISABLED);
+    bool focused = lv_obj_has_state(rows[0], LV_STATE_FOCUSED);
+    lv_color_t fill = disabled ? colorBlack : focused ? colorBlack : colorWhite;
+    lv_color_t ink = disabled ? colorMutedText : focused ? colorWhite : colorBlack;
+    lv_obj_set_style_bg_color(badge, fill, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_color(badge, disabled ? colorMuted : fill, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(badgeLabel, ink, LV_PART_MAIN | LV_STATE_DEFAULT);
 }
 
 void FamilyScreen::buildRead(void)
 {
     readPage = createPage(root);
-    lv_obj_t *hint = createLabel(readPage, &ui_font_montserrat_14, colorDimText, FAMILY_STR_READ_HINT);
-    lv_obj_set_style_pad_left(hint, 4, LV_PART_MAIN | LV_STATE_DEFAULT);
+    readPosition = createBar(readPage, FAMILY_STR_READ_TITLE);
 
     readList = createPlain(readPage);
     lv_obj_set_width(readList, lv_pct(100));
     lv_obj_set_flex_grow(readList, 1);
     lv_obj_set_flex_flow(readList, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(readList, 6, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_row(readList, c_gap, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_add_flag(readList, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(readList, LV_DIR_VER);
+    lv_obj_set_scroll_snap_y(readList, LV_SCROLL_SNAP_START); // a card starts right under the bar, no slivers
     lv_obj_set_scrollbar_mode(readList, LV_SCROLLBAR_MODE_ACTIVE);
+    lv_obj_set_style_bg_color(readList, colorWhite, LV_PART_SCROLLBAR | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(readList, LV_OPA_COVER, LV_PART_SCROLLBAR | LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(readList, 0, LV_PART_SCROLLBAR | LV_STATE_DEFAULT);
+    lv_obj_set_style_width(readList, 3, LV_PART_SCROLLBAR | LV_STATE_DEFAULT);
 }
 
 void FamilyScreen::buildSend(void)
 {
     sendPage = createPage(root);
-    createLabel(sendPage, &ui_font_montserrat_16, colorSender, FAMILY_STR_SEND_TITLE);
+    sendCount = createBar(sendPage, FAMILY_STR_SEND_TITLE);
 
     // the focusable box; the text area inside is fed by hand so LVGL's encoder edit mode never applies
     sendBox = createPlain(sendPage);
     lv_obj_set_width(sendBox, lv_pct(100));
     lv_obj_set_flex_grow(sendBox, 1);
-    lv_obj_add_style(sendBox, &styleRow, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_add_style(sendBox, &styleRowFocused, LV_PART_MAIN | LV_STATE_FOCUSED);
+    lv_obj_add_style(sendBox, &styleBlock, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_pad_all(sendBox, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_add_flag(sendBox, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(sendBox, ui_event_send_box, LV_EVENT_ALL, nullptr);
+    chamfer(sendBox);
 
     textArea = lv_textarea_create(sendBox);
     lv_group_remove_obj(textArea); // textareas join the default (MUI) group on creation
     lv_obj_clear_flag(textArea, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_style_all(textArea); // no theme border or outline; the box around it shows the focus
     lv_obj_set_size(textArea, lv_pct(100), lv_pct(100));
-    lv_obj_set_style_pad_all(textArea, 6, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(textArea, &ui_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_color(textArea, colorText, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_all(textArea, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(textArea, &family_font_20, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(textArea, colorWhite, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_scrollbar_mode(textArea, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_set_style_border_color(textArea, colorFocus, LV_PART_CURSOR | LV_STATE_FOCUSED);
-    lv_obj_set_style_border_width(textArea, 2, LV_PART_CURSOR | LV_STATE_FOCUSED);
+    lv_obj_set_style_border_color(textArea, colorWhite, LV_PART_CURSOR | LV_STATE_FOCUSED);
+    lv_obj_set_style_border_width(textArea, 3, LV_PART_CURSOR | LV_STATE_FOCUSED);
     lv_obj_set_style_border_side(textArea, LV_BORDER_SIDE_LEFT, LV_PART_CURSOR | LV_STATE_FOCUSED);
 
-    lv_obj_t *bottom = createPlain(sendPage);
-    lv_obj_set_size(bottom, lv_pct(100), LV_SIZE_CONTENT);
-    lv_obj_t *hint = createLabel(bottom, &ui_font_montserrat_14, colorDimText, FAMILY_STR_SEND_HINT);
-    lv_obj_set_align(hint, LV_ALIGN_LEFT_MID);
-    sendCount = createLabel(bottom, &ui_font_montserrat_14, colorDimText, "");
-    lv_obj_set_align(sendCount, LV_ALIGN_RIGHT_MID);
+    // key hints: [ENTER] VERSTUREN   [WIS] TERUG
+    lv_obj_t *keys = createPlain(sendPage);
+    lv_obj_set_size(keys, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(keys, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(keys, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(keys, 5, LV_PART_MAIN | LV_STATE_DEFAULT);
+    createChip(keys, FAMILY_STR_KEY_SEND);
+    createLabel(keys, &family_font_14, FAMILY_STR_HINT_SEND);
+    lv_obj_t *spacer = createPlain(keys);
+    lv_obj_set_size(spacer, 10, 1);
+    createChip(keys, FAMILY_STR_KEY_BACK);
+    createLabel(keys, &family_font_14, FAMILY_STR_HINT_BACK);
 }
 
 void FamilyScreen::show(void)
@@ -552,21 +709,22 @@ void FamilyScreen::refreshHome(bool resetFocus)
         return;
     bool hasUnread = restored && unread > 0;
     if (restored)
-        lv_label_set_text_fmt(rowLabels[0], FAMILY_STR_MESSAGES, (unsigned)unread);
+        lv_label_set_text_fmt(badgeLabel, FAMILY_STR_COUNT, (unsigned)unread);
     else
-        lv_label_set_text(rowLabels[0], FAMILY_STR_MESSAGES_LOADING);
+        lv_label_set_text(badgeLabel, FAMILY_STR_COUNT_LOADING);
     if (hasUnread)
         lv_obj_remove_state(rows[0], LV_STATE_DISABLED);
     else
         lv_obj_add_state(rows[0], LV_STATE_DISABLED);
 
-    if (page != eHome)
-        return;
-    lv_obj_t *focused = lv_group_get_focused(group);
-    lv_obj_t *focus = hasUnread ? rows[0] : rows[1];
-    if (!resetFocus && focused && (focused != rows[0] || hasUnread))
-        focus = focused;
-    rebuildGroup(focus);
+    if (page == eHome) {
+        lv_obj_t *focused = lv_group_get_focused(group);
+        lv_obj_t *focus = hasUnread ? rows[0] : rows[1];
+        if (!resetFocus && focused && (focused != rows[0] || hasUnread))
+            focus = focused;
+        rebuildGroup(focus);
+    }
+    styleBadge();
 }
 
 void FamilyScreen::refreshStrip(void)
@@ -648,6 +806,37 @@ void FamilyScreen::openRead(bool firstUnread)
 }
 
 /**
+ * One card: a header (sender left, status and time right) over the message text.
+ * Labels inherit the card's text colour, so a focused (inverted) card turns them black.
+ */
+static lv_obj_t *createCard(lv_obj_t *parent, bool own, const char *text)
+{
+    lv_obj_t *card = createPlain(parent);
+    lv_obj_set_size(card, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_add_style(card, &styleCard, LV_PART_MAIN | LV_STATE_DEFAULT);
+    if (own)
+        lv_obj_add_style(card, &styleOwnCard, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_add_style(card, &styleCardFocused, LV_PART_MAIN | LV_STATE_FOCUSED);
+    if (own)
+        lv_obj_add_style(card, &styleOwnCardFocused, LV_PART_MAIN | LV_STATE_FOCUSED);
+    lv_obj_add_flag(card, lv_obj_flag_t(LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLL_ON_FOCUS));
+    chamfer(card);
+
+    lv_obj_t *header = createPlain(card);
+    lv_obj_set_size(header, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_t *name = createLabel(header, &family_font_16, "");
+    lv_obj_set_align(name, LV_ALIGN_LEFT_MID);
+    lv_obj_t *when = createLabel(header, &family_font_14, "");
+    lv_obj_set_align(when, LV_ALIGN_RIGHT_MID);
+
+    lv_obj_t *body = createLabel(card, &family_font_20, text);
+    lv_obj_set_width(body, lv_pct(100));
+    lv_label_set_long_mode(body, LV_LABEL_LONG_WRAP);
+    return card;
+}
+
+/**
  * Rebuild the thread, one focusable card per message, and focus the card at index.
  */
 void FamilyScreen::fillRead(int focusIndex)
@@ -655,35 +844,20 @@ void FamilyScreen::fillRead(int focusIndex)
     lv_obj_clean(readList);
 
     if (!restored || count == 0) {
-        lv_obj_t *card = createPlain(readList);
-        lv_obj_set_size(card, lv_pct(100), LV_SIZE_CONTENT);
-        lv_obj_add_style(card, &styleCard, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_add_style(card, &styleCardFocused, LV_PART_MAIN | LV_STATE_FOCUSED);
-        lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_t *card = createCard(readList, false, restored ? FAMILY_STR_NO_MESSAGES : FAMILY_STR_LOADING);
+        lv_obj_add_flag(lv_obj_get_child(card, 0), LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_event_cb(card, ui_event_card, LV_EVENT_ALL, nullptr);
         card->user_data = (void *)(intptr_t)-1;
-        createLabel(card, &ui_font_montserrat_20, colorText, restored ? FAMILY_STR_NO_MESSAGES : FAMILY_STR_LOADING);
+        lv_label_set_text(readPosition, "");
         rebuildGroup(card);
         return;
     }
 
     for (int i = 0; i < count; i++) {
         const Entry &e = at(i);
-        lv_obj_t *card = createPlain(readList);
-        lv_obj_set_size(card, lv_pct(100), LV_SIZE_CONTENT);
-        lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-        lv_obj_add_style(card, &styleCard, LV_PART_MAIN | LV_STATE_DEFAULT);
-        if (e.outgoing)
-            lv_obj_add_style(card, &styleOwnCard, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_add_style(card, &styleCardFocused, LV_PART_MAIN | LV_STATE_FOCUSED);
-        lv_obj_add_flag(card, lv_obj_flag_t(LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLL_ON_FOCUS));
+        lv_obj_t *card = createCard(readList, e.outgoing, e.text);
         lv_obj_add_event_cb(card, ui_event_card, LV_EVENT_ALL, nullptr);
         card->user_data = (void *)(intptr_t)i;
-
-        createLabel(card, &ui_font_montserrat_16, e.outgoing ? colorOwnSender : colorSender, "");
-        lv_obj_t *text = createLabel(card, &ui_font_montserrat_20, colorText, e.text);
-        lv_obj_set_width(text, lv_pct(100));
-        lv_label_set_long_mode(text, LV_LABEL_LONG_WRAP);
     }
     refreshRead();
     lv_obj_update_layout(readList);
@@ -700,6 +874,16 @@ void FamilyScreen::fillRead(int focusIndex)
 }
 
 /**
+ * Upper-case ASCII letters for the raw headers; other bytes (é, UTF-8) pass through.
+ */
+static void upper(char *s)
+{
+    for (; *s; s++)
+        if (*s >= 'a' && *s <= 'z')
+            *s -= 'a' - 'A';
+}
+
+/**
  * Rewrite the card headers: sender, status and time. Times are relative, so this runs periodically.
  */
 void FamilyScreen::refreshRead(void)
@@ -710,19 +894,21 @@ void FamilyScreen::refreshRead(void)
         if (i < 0 || i >= count)
             continue;
         const Entry &e = at(i);
-        char name[48], when[32], buf[112];
+        char name[48], when[32], right[80];
         formatTime(e, when, sizeof(when));
         if (e.outgoing) {
-            snprintf(buf, sizeof(buf), "%s · %s%s%s", FAMILY_STR_ME, e.failed ? FAMILY_STR_NOT_SENT : FAMILY_STR_SENT,
-                     *when ? " · " : "", when);
+            snprintf(name, sizeof(name), "%s", FAMILY_STR_ME);
+            snprintf(right, sizeof(right), "%s%s%s", e.failed ? "! " FAMILY_STR_NOT_SENT : FAMILY_STR_SENT, *when ? " · " : "",
+                     when);
         } else {
-            snprintf(buf, sizeof(buf), "%s%s%s%s", senderName(e.from, name, sizeof(name)),
-                     e.to != UINT32_MAX ? " · " FAMILY_STR_PRIVATE : "", *when ? " · " : "", when);
+            senderName(e.from, name, sizeof(name));
+            upper(name);
+            snprintf(right, sizeof(right), "%s%s%s", e.to != UINT32_MAX ? FAMILY_STR_PRIVATE : "",
+                     e.to != UINT32_MAX && *when ? " · " : "", when);
         }
         lv_obj_t *header = lv_obj_get_child(card, 0);
-        lv_label_set_text(header, buf);
-        lv_obj_set_style_text_color(header, e.outgoing ? (e.failed ? colorFailed : colorOwnSender) : colorSender,
-                                    LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_label_set_text(lv_obj_get_child(header, 0), name);
+        lv_label_set_text(lv_obj_get_child(header, 1), right);
     }
 }
 
@@ -837,6 +1023,7 @@ void FamilyScreen::tick(void)
     }
 
     if (devMode) {
+        restyleMui(); // MUI recolours and creates objects at runtime
         // MUI does not outlast the screen saver: whoever wakes the device gets the family screen
         if (screenSaverActive()) {
             ILOG_INFO("family: screen saver started, leaving dev mode");
@@ -874,6 +1061,7 @@ void FamilyScreen::enterDevMode(void)
     lv_display_trigger_activity(NULL); // the swallowed chord key did not count as activity; idle starts now
     hide();
     view->ui_set_active(objects.home_button, objects.home_panel, objects.top_panel);
+    restyleMui();
 }
 
 void FamilyScreen::leaveDevMode(void)
@@ -1016,7 +1204,7 @@ void FamilyScreen::ui_event_screen(lv_event_t *e)
  */
 static bool keypadArrow(lv_event_t *e, lv_group_t *group)
 {
-    if (lv_event_get_code(e) != LV_EVENT_KEY || !lv_indev_active() || lv_indev_get_type(lv_indev_active()) != LV_INDEV_TYPE_KEYPAD)
+    if (lv_event_get_code(e) != LV_EVENT_KEY || (lv_indev_active() && lv_indev_get_type(lv_indev_active()) != LV_INDEV_TYPE_KEYPAD))
         return false;
     uint32_t key = lv_event_get_key(e);
     if (key == LV_KEY_UP)
@@ -1030,7 +1218,12 @@ static bool keypadArrow(lv_event_t *e, lv_group_t *group)
 
 void FamilyScreen::ui_event_row(lv_event_t *e)
 {
-    if (keypadArrow(e, family->group) || lv_event_get_code(e) != LV_EVENT_CLICKED)
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_FOCUSED || code == LV_EVENT_DEFOCUSED) {
+        family->styleBadge(); // the badge inverts with row 1
+        return;
+    }
+    if (keypadArrow(e, family->group) || code != LV_EVENT_CLICKED)
         return;
     switch ((intptr_t)lv_event_get_user_data(e)) {
     case 0:
@@ -1050,6 +1243,10 @@ void FamilyScreen::ui_event_card(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_CLICKED) {
         family->goHome();
+    } else if (code == LV_EVENT_FOCUSED) {
+        int i = (int)(intptr_t)((lv_obj_t *)lv_event_get_current_target(e))->user_data;
+        if (i >= 0)
+            lv_label_set_text_fmt(family->readPosition, FAMILY_STR_READ_POSITION, i + 1, family->count);
     } else if (code == LV_EVENT_KEY && !keypadArrow(e, family->group)) {
         uint32_t key = lv_event_get_key(e);
         if (key == LV_KEY_BACKSPACE || key == LV_KEY_ESC)
@@ -1078,7 +1275,7 @@ void FamilyScreen::ui_event_send_box(lv_event_t *e)
     } else if (key == LV_KEY_ESC) {
         f.goHome();
     } else if (key >= 0x20 && key != 0x7f) {
-        bool keypad = lv_indev_active() && lv_indev_get_type(lv_indev_active()) == LV_INDEV_TYPE_KEYPAD;
+        bool keypad = !lv_indev_active() || lv_indev_get_type(lv_indev_active()) == LV_INDEV_TYPE_KEYPAD; // no indev: sent by code
         if (keypad && strlen(text) + utf8Length(key) <= c_maxSendBytes)
             lv_textarea_add_char(f.textArea, key);
     }

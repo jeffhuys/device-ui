@@ -88,6 +88,7 @@ class FamilyScreen
     void buildHome(void);
     void buildRead(void);
     void buildSend(void);
+    void styleBadge(void);
     void show(void);
     void hide(void);
     void showPage(Page page);
@@ -105,6 +106,10 @@ class FamilyScreen
     const char *senderName(uint32_t nodeNum, char *buf, size_t len);
     void formatTime(const Entry &e, char *buf, size_t len);
 
+    // theme (FamilyTheme.cpp): the VOXL black and white over all of MUI
+    void installTheme(void);
+    void restyleMui(void);
+
     // readiness gate and dev mode
     bool ready(void);
     void tick(void);
@@ -119,6 +124,16 @@ class FamilyScreen
 
     static void keyboard_read(lv_indev_t *indev, lv_indev_data_t *data);
     static void timer_tick(lv_timer_t *timer);
+
+#ifdef ARCH_PORTDUINO
+  public:
+    // desktop build only (FamilySim.cpp): commands from the file named by FAMILY_SIM_CMDS
+    static void simCommandStatic(const char *line);
+
+  private:
+    void startSim(void);
+    void simCommand(const char *line);
+#endif
     static void async_toggle_dev_mode(void *);
     static void ui_event_screen(lv_event_t *e);
     static void ui_event_row(lv_event_t *e);
@@ -136,10 +151,14 @@ class FamilyScreen
     lv_obj_t *readPage = nullptr;
     lv_obj_t *sendPage = nullptr;
     lv_obj_t *clockLabel = nullptr;
+    lv_obj_t *alertChip = nullptr;
     lv_obj_t *alertLabel = nullptr;
     lv_obj_t *batteryLabel = nullptr;
     lv_obj_t *rows[3] = {};
     lv_obj_t *rowLabels[3] = {};
+    lv_obj_t *badge = nullptr;
+    lv_obj_t *badgeLabel = nullptr;
+    lv_obj_t *readPosition = nullptr;
     lv_obj_t *readList = nullptr;
     lv_obj_t *textArea = nullptr;
     lv_obj_t *sendBox = nullptr;
