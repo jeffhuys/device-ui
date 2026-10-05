@@ -837,7 +837,11 @@ void FamilyScreen::tick(void)
     }
 
     if (devMode) {
-        if (lv_display_get_inactive_time(NULL) > c_devModeIdleMs) {
+        // MUI does not outlast the screen saver: whoever wakes the device gets the family screen
+        if (screenSaverActive()) {
+            ILOG_INFO("family: screen saver started, leaving dev mode");
+            leaveDevMode();
+        } else if (lv_display_get_inactive_time(NULL) > c_devModeIdleMs) {
             ILOG_INFO("family: dev mode idle, leaving");
             leaveDevMode();
         }
@@ -884,8 +888,20 @@ void FamilyScreen::leaveDevMode(void)
     }
     lv_obj_add_flag(objects.keyboard, LV_OBJ_FLAG_HIDDEN);
     view->ui_set_active(objects.home_button, objects.home_panel, objects.top_panel);
+    // ui_set_active() moved MUI's focus to its home panel; while the screen sleeps, the wake press
+    // must land on the blank screen button again, or the screen never unlocks
+    if (screenSaverActive())
+        lv_group_focus_obj(objects.blank_screen_button);
     if (ready())
         show();
+}
+
+/**
+ * True while MUI shows its blank screen: dimmed into power save (screenSaving) or blanked.
+ */
+bool FamilyScreen::screenSaverActive(void)
+{
+    return TFTView_320x240::screenLocked || lv_screen_active() == objects.blank_screen;
 }
 
 // ===== input =====

@@ -110,6 +110,7 @@ class FamilyScreen
     void tick(void);
     void enterDevMode(void);
     void leaveDevMode(void);
+    bool screenSaverActive(void);
 
     // input
     void hookInput(void);
