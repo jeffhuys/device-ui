@@ -29,6 +29,13 @@
 #endif
 
 extern fs::FS &persistentFS; // ViewController.cpp, the filesystem that holds /messages
+#if defined(ARCH_ESP32)
+void familyCrumb(int what, uint32_t value); // FamilyCrash.cpp: 0 screen tick, 1 input read, 2 trackball held since
+void familyCrashReport(void);
+#define FAMILY_CRUMB(W, V) familyCrumb(W, V)
+#else
+#define FAMILY_CRUMB(W, V)
+#endif
 
 LV_FONT_DECLARE(family_font_28);
 LV_FONT_DECLARE(family_font_20);
@@ -120,6 +127,7 @@ void FamilyScreen::attach(TFTView_320x240 *view)
 #if defined(ARCH_ESP32)
     // the firmware logs this in its first second, before a USB reader can attach; repeat it here
     ILOG_INFO("family: reset reason %d (1 power-on, 3 software, 4 panic, 5-7 watchdog, 9 brownout)", (int)esp_reset_reason());
+    familyCrashReport();
 #endif
     ILOG_INFO("family screen attached (channel %d)", FAMILY_CHANNEL);
 }
@@ -1123,6 +1131,7 @@ void FamilyScreen::checkRestored(void)
 
 void FamilyScreen::tick(void)
 {
+    FAMILY_CRUMB(0, millis());
     hookInput();
     resumeStormPins();
     checkRestored();
@@ -1239,6 +1248,7 @@ void FamilyScreen::trackBall(void)
     } else {
         ballDownSince = 0;
     }
+    FAMILY_CRUMB(2, ballDownSince);
 #endif
 }
 
@@ -1263,6 +1273,7 @@ void FamilyScreen::keyboard_read(lv_indev_t *indev, lv_indev_data_t *data)
     }
     if (!family)
         return;
+    FAMILY_CRUMB(1, millis());
     family->trackBall();
 
     if (data->state != LV_INDEV_STATE_PRESSED) {
