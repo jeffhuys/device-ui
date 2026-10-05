@@ -8,6 +8,7 @@
 #include "LittleFS.h"
 #endif
 #include "Arduino.h"
+#include "graphics/driver/DisplayDriver.h"
 #include "graphics/view/TFT/TFTView_320x240.h"
 #include "family_strings.h"
 #include "lv_i18n.h"
@@ -18,6 +19,9 @@
 #include <cstdio>
 #include <cstring>
 #include <time.h>
+#if defined(T_DECK) && !defined(ARCH_PORTDUINO)
+#include <Wire.h>
+#endif
 
 extern fs::FS &persistentFS; // ViewController.cpp, the filesystem that holds /messages
 
@@ -797,6 +801,38 @@ void FamilyScreen::wake(void)
     lv_display_trigger_activity(NULL);
 }
 
+/**
+ * The T-Deck's keyboard is an ESP32-C3 at I2C 0x55. LilyGO's keyboard firmware (since 2024-12-25)
+ * sets its backlight PWM on a write of 0x01 and a duty; at power-up the light is off, and only
+ * Alt+B toggles it. Keep it lit at the screen's brightness while the screen is on, and dark from
+ * the moment MUI starts dimming the screen for its timeout. Sent when it changes, and again every
+ * 5 s while lit, so Alt+B cannot leave it off. Older keyboard firmware ignores the write.
+ * The main screen's load and unload decide by themselves: on wake, MUI loads the main screen before
+ * it clears its lock flag and resets the idle time.
+ */
+void FamilyScreen::keyboardLight(int force)
+{
+#if defined(T_DECK) && !defined(ARCH_PORTDUINO)
+    constexpr uint8_t c_keyboardAddr = 0x55, c_brightnessCmd = 0x01;
+    constexpr uint32_t c_resendMs = 5000;
+    DisplayDriver *display = view->getDisplayDriver();
+    uint32_t timeoutMs = display ? display->getScreenTimeout() * 1000 : 0;
+    bool dimming = timeoutMs > 0 && lv_display_get_inactive_time(NULL) > timeoutMs;
+    bool on = force >= 0 ? force == 1 : !screenSaverActive() && !dimming && !(display && display->isPowersaving());
+    int16_t duty = on ? LV_MAX(view->db.uiConfig.screen_brightness, 64) : 0;
+    if (force < 0 && duty == keyboardDuty && (duty == 0 || millis() - keyboardSentAt < c_resendMs))
+        return;
+    Wire.beginTransmission(c_keyboardAddr);
+    Wire.write(c_brightnessCmd);
+    Wire.write((uint8_t)duty);
+    uint8_t err = Wire.endTransmission();
+    if (duty != keyboardDuty)
+        ILOG_DEBUG("family: keyboard light %d (i2c %d)", duty, err);
+    keyboardDuty = duty;
+    keyboardSentAt = millis();
+#endif
+}
+
 void FamilyScreen::openRead(bool firstUnread)
 {
     int focus = count - 1;
@@ -1027,6 +1063,7 @@ void FamilyScreen::tick(void)
 {
     hookInput();
     checkRestored();
+    keyboardLight(-1);
 
     if (booting) {
         // the boot animation brings the family screen (or MUI's setup) up when it ends
@@ -1208,6 +1245,7 @@ void FamilyScreen::ui_event_screen(lv_event_t *e)
 {
     family->mainScreenActive = lv_event_get_code(e) == LV_EVENT_SCREEN_LOAD_START;
     family->assignGroup();
+    family->keyboardLight(family->mainScreenActive ? 1 : 0); // the blank screen comes and goes with these
 }
 
 /**

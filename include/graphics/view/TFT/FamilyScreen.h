@@ -103,6 +103,7 @@ class FamilyScreen
     void rebuildGroup(lv_obj_t *focus);
     void assignGroup(void);
     void wake(void);
+    void keyboardLight(int force); // -1: follow the screen, 0: off now, 1: on now
     const char *senderName(uint32_t nodeNum, char *buf, size_t len);
     void formatTime(const Entry &e, char *buf, size_t len);
 
@@ -196,6 +197,10 @@ class FamilyScreen
 
     // trackball button (or the desktop stand-in)
     uint32_t ballDownSince = 0;
+
+    // keyboard backlight: the PWM duty last sent, -1 = never, and when
+    int16_t keyboardDuty = -1;
+    uint32_t keyboardSentAt = 0;
 };
 
 #endif
