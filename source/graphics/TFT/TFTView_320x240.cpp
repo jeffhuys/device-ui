@@ -6,6 +6,9 @@
 #include "graphics/common/LoRaPresets.h"
 #include "graphics/common/Ringtones.h"
 #include "graphics/common/ViewController.h"
+#ifdef FAMILY_UI
+#include "graphics/view/TFT/FamilyScreen.h"
+#endif
 #include "graphics/driver/DisplayDriver.h"
 #include "graphics/driver/DisplayDriverFactory.h"
 #include "graphics/map/MapPanel.h"
@@ -187,7 +190,9 @@ void TFTView_320x240::init(IClientBase *client)
     time(&lastrun5);
     time(&lastrun1);
 
+#ifndef FAMILY_UI // no hold-on-splash programming mode; dev mode has the progmode button
     lv_obj_add_event_cb(objects.boot_logo_button, ui_event_LogoButton, LV_EVENT_ALL, NULL);
+#endif
     lv_obj_add_event_cb(objects.blank_screen_button, ui_event_BlankScreenButton, LV_EVENT_ALL, NULL);
 
     lv_timer_create(timer_event_programming_mode, 3000, NULL); // timer for programming mode button active
@@ -444,6 +449,9 @@ void TFTView_320x240::init_screens(void)
 
     screensInitialised = true;
     state = MeshtasticView::eInitDone;
+#ifdef FAMILY_UI
+    FamilyScreen::attach(this);
+#endif
     ILOG_DEBUG("TFTView_320x240 init done.");
 }
 
@@ -4486,6 +4494,9 @@ void TFTView_320x240::handleAddMessage(char *msg)
 
     controller->sendTextMessage(to, ch, hopLimit, actTime, requestId, usePkc, msg);
     addMessage(activeMsgContainer, actTime, requestId, msg, LogMessage::eNone);
+#ifdef FAMILY_UI
+    FamilyScreen::sentMessage(to, ch, actTime, requestId, msg);
+#endif
 }
 
 /**
@@ -5696,6 +5707,9 @@ bool TFTView_320x240::applyNodesFilter(uint32_t nodeNum, bool reset)
 
 void TFTView_320x240::messageAlert(const char *alert, bool show)
 {
+#ifdef FAMILY_UI
+    FamilyScreen::alert(alert, show);
+#endif
     lv_label_set_text(objects.alert_label, alert);
     if (show)
         lv_obj_clear_flag(objects.alert_panel, LV_OBJ_FLAG_HIDDEN);
@@ -5712,6 +5726,9 @@ void TFTView_320x240::messageAlert(const char *alert, bool show)
  */
 void TFTView_320x240::handleTextMessageResponse(uint32_t channelOrNode, const uint32_t id, bool ack, bool err)
 {
+#ifdef FAMILY_UI
+    FamilyScreen::textMessageResponse(channelOrNode, id, ack, err);
+#endif
     lv_obj_t *msgContainer;
     if (channelOrNode < c_max_channels) {
         msgContainer = channelGroup[(uint8_t)channelOrNode];
@@ -6414,6 +6431,9 @@ lv_obj_t *TFTView_320x240::newMessageContainer(uint32_t from, uint32_t to, uint8
 void TFTView_320x240::newMessage(uint32_t from, uint32_t to, uint8_t ch, const char *msg, uint32_t &msgTime, bool restore)
 {
     ILOG_DEBUG("newMessage: from:0x%08x, to:0x%08x, ch:%d, time:%d", from, to, ch, msgTime);
+#ifdef FAMILY_UI
+    FamilyScreen::newMessage(from, to, ch, msg, msgTime, restore);
+#endif
     int pos = 0;
     char buf[284]; // 237 + 4 + 40 + 2 + 1
     lv_obj_t *container = nullptr;
@@ -6508,6 +6528,9 @@ void TFTView_320x240::newMessage(uint32_t nodeNum, lv_obj_t *container, uint8_t 
  */
 void TFTView_320x240::restoreMessage(const LogMessage &msg)
 {
+#ifdef FAMILY_UI
+    FamilyScreen::restoreMessage(msg);
+#endif
     //((uint8_t *)msg.bytes)[msg._size] = 0;
     // ILOG_DEBUG("restoring msg from:0x%08x, to:0x%08x, ch:%d, time:%d, status:%d, trash:%d, size:%d, '%s'", msg.from, msg.to,
     //           msg.ch, msg.time, (int)msg.status, msg.trashFlag, msg._size, msg.bytes);
@@ -6712,6 +6735,10 @@ void TFTView_320x240::notifyMessagesRestored(void)
  */
 void TFTView_320x240::showMessagePopup(uint32_t from, uint32_t to, uint8_t ch, const char *name)
 {
+#ifdef FAMILY_UI
+    if (FamilyScreen::hidesMessagePopup())
+        return;
+#endif
     if (name) {
         static char buf[64];
         sprintf(buf, _("New message from \n%s"), name);

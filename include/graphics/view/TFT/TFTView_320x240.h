@@ -205,6 +205,9 @@ class TFTView_320x240 : public MeshtasticView
   private:
     // view creation only via ViewFactory
     friend class ViewFactory;
+#ifdef FAMILY_UI
+    friend class FamilyScreen;
+#endif
     static TFTView_320x240 *instance(void);
     static TFTView_320x240 *instance(const DisplayDriverConfig &cfg);
     TFTView_320x240();
