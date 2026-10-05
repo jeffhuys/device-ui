@@ -150,6 +150,7 @@ class FamilyScreen
     bool mainScreenActive = false; // main screen (and so the overlay) is the loaded screen
     bool restored = false;         // /messages log has been read back
     uint32_t alertHideAt = 0;      // millis() to clear a transient alert, 0 = keep
+    uint32_t ticks = 0;            // 1s family timer runs
 
     // messages, oldest first
     Entry entries[c_maxEntries];

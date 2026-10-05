@@ -32,7 +32,10 @@ LV_FONT_DECLARE(family_font_28);
 constexpr const char *c_markerFile = "/family_read.bin"; // last-read marker, next to /messages
 constexpr uint32_t c_markerMagic = 0x464d5231;           // "FMR1"
 constexpr uint32_t c_chordHoldMs = 1000;                 // trackball held before P counts
-constexpr uint32_t c_devModeIdleMs = 10 * 60 * 1000;     // dev mode auto-exit
+#ifndef FAMILY_DEV_IDLE_MS
+#define FAMILY_DEV_IDLE_MS (10 * 60 * 1000) // dev mode auto-exit; override only for a desktop test
+#endif
+constexpr uint32_t c_devModeIdleMs = FAMILY_DEV_IDLE_MS;
 constexpr uint32_t c_nodeLabelIdx = 2;                   // long name label in a MUI node panel (see addNode)
 
 constexpr lv_color_t colorBackground = LV_COLOR_HEX(0x000000);
@@ -103,13 +106,14 @@ void FamilyScreen::newMessage(uint32_t from, uint32_t to, uint8_t ch, const char
     if (!family || restore || !family->isFamily(from, to, ch))
         return;
     FamilyScreen &f = *family;
+    bool full = f.count == c_maxEntries; // the oldest message drops out and every index moves down by one
     f.add(from, to, ch, msgTime, msg, strnlen(msg, messagePayloadSize), false, true, 0);
 
     if (f.shown && f.page == eRead && f.mainScreenActive) {
         // the thread is on screen: follow it if the newest card was focused
         lv_obj_t *focused = lv_group_get_focused(f.group);
         bool atEnd = !focused || focused == lv_obj_get_child(f.readList, -1);
-        int index = focused ? (int)(intptr_t)focused->user_data : f.count - 1;
+        int index = focused ? (int)(intptr_t)focused->user_data - (full ? 1 : 0) : f.count - 1;
         f.markRead();
         f.fillRead(atEnd ? f.count - 1 : index);
     } else {
@@ -690,7 +694,9 @@ void FamilyScreen::fillRead(int focusIndex)
         focusIndex = count - 1;
     lv_obj_t *focus = lv_obj_get_child(readList, focusIndex);
     rebuildGroup(focus);
-    lv_obj_scroll_to_view(focus, LV_ANIM_OFF);
+    // put the focused card at the top, so the messages after it (the rest of the unread) show below it
+    int32_t maxY = lv_obj_get_scroll_y(readList) + lv_obj_get_scroll_bottom(readList);
+    lv_obj_scroll_to_y(readList, std::min(lv_obj_get_y(focus), maxY), LV_ANIM_OFF);
 }
 
 /**
@@ -848,7 +854,7 @@ void FamilyScreen::tick(void)
         if (lv_obj_get_index(root) != (int32_t)lv_obj_get_child_count(objects.main_screen) - 1)
             lv_obj_move_foreground(root);
         refreshStrip();
-        if (page == eRead && lv_tick_get() / 1000 % 30 == 0)
+        if (page == eRead && ++ticks % 30 == 0) // relative times ("5 min geleden") move on
             refreshRead();
     }
     if (alertHideAt && (int32_t)(millis() - alertHideAt) >= 0)
@@ -861,6 +867,7 @@ void FamilyScreen::enterDevMode(void)
 {
     ILOG_INFO("family: dev mode on");
     devMode = true;
+    lv_display_trigger_activity(NULL); // the swallowed chord key did not count as activity; idle starts now
     hide();
     view->ui_set_active(objects.home_button, objects.home_panel, objects.top_panel);
 }
