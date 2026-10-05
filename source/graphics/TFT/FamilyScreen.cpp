@@ -22,6 +22,9 @@
 #if defined(T_DECK) && !defined(ARCH_PORTDUINO)
 #include <Wire.h>
 #endif
+#if defined(ARCH_ESP32)
+#include "esp_system.h"
+#endif
 
 extern fs::FS &persistentFS; // ViewController.cpp, the filesystem that holds /messages
 
@@ -112,6 +115,10 @@ void FamilyScreen::attach(TFTView_320x240 *view)
     family->startSim();
 #endif
     family->startBoot();
+#if defined(ARCH_ESP32)
+    // the firmware logs this in its first second, before a USB reader can attach; repeat it here
+    ILOG_INFO("family: reset reason %d (1 power-on, 3 software, 4 panic, 5-7 watchdog, 9 brownout)", (int)esp_reset_reason());
+#endif
     ILOG_INFO("family screen attached (channel %d)", FAMILY_CHANNEL);
 }
 
@@ -1165,6 +1172,14 @@ void FamilyScreen::trackBall(void)
     if (digitalRead(INPUTDRIVER_ENCODER_BTN) == LOW) {
         if (!ballDownSince)
             ballDownSince = millis() ? millis() : 1;
+        // diagnosis: one T-Deck restarted while the ball was held; log how far a hold gets
+        static const uint32_t marks[] = {500, 1000, 2000, 3000};
+        static int logged = 0;
+        uint32_t held = millis() - ballDownSince;
+        if (held < marks[0])
+            logged = 0;
+        while (logged < 4 && held >= marks[logged])
+            ILOG_INFO("family: ball held %u ms", (unsigned)marks[logged++]);
     } else {
         ballDownSince = 0;
     }

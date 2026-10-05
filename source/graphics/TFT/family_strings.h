@@ -21,7 +21,7 @@
 #define FAMILY_STR_ME "IK"
 #define FAMILY_STR_PRIVATE "PRIVÉ"
 #define FAMILY_STR_SENT "VERSTUURD"
-#define FAMILY_STR_NOT_SENT "NIET VERSTUURD"
+#define FAMILY_STR_NOT_SENT "NIET BEVESTIGD" // no node was heard passing it on; it may still have arrived
 #define FAMILY_STR_JUST_NOW "ZOJUIST"
 #define FAMILY_STR_MINUTES_AGO "%u MIN GELEDEN"
 #define FAMILY_STR_HOURS_AGO "%u UUR GELEDEN"
