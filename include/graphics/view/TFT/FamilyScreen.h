@@ -39,6 +39,9 @@ class FamilyScreen
     static bool hidesMessagePopup(void);
     // TFTView_320x240::messageAlert(): mirror MUI alerts onto the family status line
     static void alert(const char *text, bool show);
+    // EncoderInputDriver's trackball interrupts: true if this pin fires far faster than a hand can roll;
+    // its interrupt is then paused, and resumed by the 1 s tick (FamilyScreen.cpp, "interrupt storms")
+    static bool isrStorm(uint8_t pin);
 
   private:
     enum Page { eHome, eRead, eSend };
@@ -104,6 +107,7 @@ class FamilyScreen
     void assignGroup(void);
     void wake(void);
     void keyboardLight(int force); // -1: follow the screen, 0: off now, 1: on now
+    void resumeStormPins(void);
     const char *senderName(uint32_t nodeNum, char *buf, size_t len);
     void formatTime(const Entry &e, char *buf, size_t len);
 

@@ -24,6 +24,8 @@
 #endif
 #if defined(ARCH_ESP32)
 #include "esp_system.h"
+#include "hal/cpu_hal.h"
+#include "hal/gpio_ll.h"
 #endif
 
 extern fs::FS &persistentFS; // ViewController.cpp, the filesystem that holds /messages
@@ -1055,6 +1057,59 @@ bool FamilyScreen::ready(void)
     return pskSize == 16 || pskSize == 32;
 }
 
+// ===== interrupt storms =====
+//
+// Jeff restarted on the interrupt watchdog (reset reason 5) when the trackball was held, on some
+// days and not others, surviving power cycles, and gone after rolling the ball a lot (2026-10-05).
+// Likely cause: the trackball's Hall sensor outputs, which MUI takes on edge interrupts, chatter when
+// a magnet rests at a switching point, and core 0 drowns in interrupts. A hand cannot roll faster
+// than a few hundred edges a second; a pin with more than c_stormEdges edges within c_stormWindowMs
+// gets its interrupt switched off in the ISR, and the 1 s tick switches it back on and logs it.
+
+#if defined(ARCH_ESP32) && defined(INPUTDRIVER_ENCODER_TYPE)
+constexpr uint32_t c_stormEdges = 50, c_stormWindowMs = 10, c_cyclesPerMs = 240000; // the S3 runs at 240 MHz
+constexpr int c_stormPins = 49;
+static volatile uint32_t stormWindowStart[c_stormPins], stormEdges[c_stormPins], stormCount[c_stormPins];
+static volatile bool stormPaused[c_stormPins];
+
+bool IRAM_ATTR FamilyScreen::isrStorm(uint8_t pin)
+{
+    if (pin >= c_stormPins)
+        return false;
+    uint32_t now = cpu_hal_get_cycle_count();
+    if (now - stormWindowStart[pin] > c_stormWindowMs * c_cyclesPerMs) {
+        stormWindowStart[pin] = now;
+        stormEdges[pin] = 0;
+    }
+    if (++stormEdges[pin] <= c_stormEdges)
+        return false;
+    gpio_ll_intr_disable(&GPIO, (gpio_num_t)pin);
+    stormPaused[pin] = true;
+    stormCount[pin]++;
+    return true;
+}
+
+void FamilyScreen::resumeStormPins(void)
+{
+    for (int pin = 0; pin < c_stormPins; pin++) {
+        if (!stormPaused[pin])
+            continue;
+        ILOG_WARN("family: interrupt storm on GPIO %d (%u times), its interrupt was paused for about a second", pin,
+                  (unsigned)stormCount[pin]);
+        stormPaused[pin] = false;
+        stormEdges[pin] = 0;
+        gpio_ll_intr_enable_on_core(&GPIO, 0, (gpio_num_t)pin);
+    }
+}
+#else
+bool FamilyScreen::isrStorm(uint8_t)
+{
+    return false;
+}
+
+void FamilyScreen::resumeStormPins(void) {}
+#endif
+
 void FamilyScreen::checkRestored(void)
 {
     if (!restored && view->messagesRestored) {
@@ -1069,6 +1124,7 @@ void FamilyScreen::checkRestored(void)
 void FamilyScreen::tick(void)
 {
     hookInput();
+    resumeStormPins();
     checkRestored();
     keyboardLight(-1);
 

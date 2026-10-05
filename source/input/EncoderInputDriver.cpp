@@ -3,6 +3,9 @@
 #include "input/EncoderInputDriver.h"
 #include "Arduino.h"
 #include "util/ILog.h"
+#ifdef FAMILY_UI
+#include "graphics/view/TFT/FamilyScreen.h"
+#endif
 
 volatile EncoderInputDriver::EncoderActionType EncoderInputDriver::action = TB_ACTION_NONE;
 
@@ -119,21 +122,37 @@ void EncoderInputDriver::intPressHandler()
 
 void EncoderInputDriver::intDownHandler()
 {
+#if defined(FAMILY_UI) && defined(INPUTDRIVER_ENCODER_DOWN)
+    if (FamilyScreen::isrStorm(INPUTDRIVER_ENCODER_DOWN))
+        return;
+#endif
     action = TB_ACTION_DOWN;
 }
 
 void EncoderInputDriver::intUpHandler()
 {
+#if defined(FAMILY_UI) && defined(INPUTDRIVER_ENCODER_UP)
+    if (FamilyScreen::isrStorm(INPUTDRIVER_ENCODER_UP))
+        return;
+#endif
     action = TB_ACTION_UP;
 }
 
 void EncoderInputDriver::intLeftHandler()
 {
+#if defined(FAMILY_UI) && defined(INPUTDRIVER_ENCODER_LEFT)
+    if (FamilyScreen::isrStorm(INPUTDRIVER_ENCODER_LEFT))
+        return;
+#endif
     action = TB_ACTION_LEFT;
 }
 
 void EncoderInputDriver::intRightHandler()
 {
+#if defined(FAMILY_UI) && defined(INPUTDRIVER_ENCODER_RIGHT)
+    if (FamilyScreen::isrStorm(INPUTDRIVER_ENCODER_RIGHT))
+        return;
+#endif
     action = TB_ACTION_RIGHT;
 }
 
