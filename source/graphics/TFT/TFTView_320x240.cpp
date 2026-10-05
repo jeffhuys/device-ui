@@ -195,7 +195,11 @@ void TFTView_320x240::init(IClientBase *client)
 #endif
     lv_obj_add_event_cb(objects.blank_screen_button, ui_event_BlankScreenButton, LV_EVENT_ALL, NULL);
 
+#ifdef FAMILY_UI // nothing to hold the splash for (see above); the boot animation follows it
+    lv_timer_create(timer_event_programming_mode, 500, NULL);
+#else
     lv_timer_create(timer_event_programming_mode, 3000, NULL); // timer for programming mode button active
+#endif
 }
 
 /**

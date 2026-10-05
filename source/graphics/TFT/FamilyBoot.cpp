@@ -17,12 +17,18 @@
 
 #include "graphics/view/TFT/FamilyScreen.h"
 #include "graphics/view/TFT/TFTView_320x240.h"
+#include "Arduino.h"
 #include "family_strings.h"
 #include "lvgl_private.h"
 #include "ui.h"
 #include "util/ILog.h"
 #include <cmath>
 #include <cstring>
+#if defined(ARCH_ESP32)
+#include "esp_heap_caps.h"
+#endif
+
+extern bool familyFilterBypass; // FamilyTheme.cpp: hand pixels to the panel without the grey curve
 
 LV_IMAGE_DECLARE(family_logo_voxl);
 LV_IMAGE_DECLARE(family_logo_network);
@@ -45,16 +51,16 @@ constexpr int32_t c_networkX = 100, c_networkY = 147;
 constexpr int32_t c_logoX1 = 22, c_logoY1 = 66, c_logoX2 = 298, c_logoY2 = 186; // the logo with a margin
 
 // timeline, in ms from the first frame
-constexpr uint32_t c_hold = 150;
-constexpr uint32_t c_glitchEnd = 650;
-constexpr uint32_t c_shatter = 180, c_shatterStagger = 8; // per slice
-constexpr uint32_t c_pulseStart = 720;
-constexpr uint32_t c_ringFirst = 860, c_ringEvery = 330, c_ringLife = 1300;
-constexpr uint32_t c_minOutro = 2000;    // the pulse shows at least until here
-constexpr uint32_t c_restoreWait = 1500; // after config, wait this long for the message log at most
-constexpr uint32_t c_assemble = 450, c_assembleSlice = 300, c_assembleStagger = 12;
-constexpr uint32_t c_flash = 70, c_shake = 150;
-constexpr uint32_t c_wipe = 360;
+constexpr uint32_t c_hold = 100;
+constexpr uint32_t c_glitchEnd = 520;
+constexpr uint32_t c_shatter = 160, c_shatterStagger = 6; // per slice
+constexpr uint32_t c_pulseStart = 580;
+constexpr uint32_t c_ringFirst = 680, c_ringEvery = 300, c_ringLife = 1200;
+constexpr uint32_t c_minOutro = 1400;   // the pulse shows at least until here: the first ring has found every house
+constexpr uint32_t c_restoreWait = 400; // after config, wait this long for the message log at most; the count follows
+constexpr uint32_t c_assemble = 380, c_assembleSlice = 260, c_assembleStagger = 9;
+constexpr uint32_t c_flash = 70, c_shake = 100;
+constexpr uint32_t c_wipe = 280;
 constexpr uint32_t c_frameMs = 15;
 
 constexpr int32_t c_nodeX = 160, c_nodeY = 98;
@@ -114,7 +120,9 @@ struct Prim {
 };
 
 // in LVGL's pool (PSRAM on the T-Deck) while the animation runs, freed after it
-constexpr int c_maxPrims = 160, c_maxDirty = 2 * c_maxPrims, c_maxInvalid = 20, c_maxMerge = 64;
+constexpr int c_maxPrims = 160, c_maxDirty = 2 * c_maxPrims, c_maxInvalid = 24, c_maxMerge = 64;
+// what one more area costs to render and flush, in pixels: two areas closer than this are joined
+constexpr int64_t c_areaCost = 600;
 Prim *prims = nullptr, *prevPrims = nullptr;
 lv_area_t *dirtyAreas = nullptr;
 int primCount = 0, prevPrimCount = 0;
@@ -303,35 +311,121 @@ uint32_t hash(uint32_t a, uint32_t b)
 }
 
 /**
- * The glitch's displacement of slice i at time t, at strength g (0..1). It changes every 45 ms, so it
- * reads as stepping, not as noise; sometimes the letters or the NETWORK block tear as one.
+ * The glitch: each slice holds its offset (and whether it is inverted) until it rolls again. Every 70 ms
+ * a part of the slices rolls a new offset or heals, so it reads as stepping, and only the slices that
+ * rolled are redrawn. Sometimes the letters or the NETWORK block tear as one.
  */
-int32_t glitchDx(uint32_t t, int i, float g, bool *inverted)
+int32_t glitchDx[c_slices];
+bool glitchInverted[c_slices];
+uint32_t glitchStep = UINT32_MAX;
+
+void glitchTo(uint32_t t, float g)
 {
-    uint32_t step = t / 45;
+    uint32_t step = t / 70;
+    if (step == glitchStep)
+        return;
+    glitchStep = step;
     int32_t amp = 2 + (int32_t)(26 * g * g);
     uint32_t tear = hash(step, 777);
-    uint32_t r = hash(step, i);
-    int32_t dx = 0;
-    if ((r & 0xff) < 50 + 170 * g)
-        dx = (int32_t)((r >> 8) % (2 * amp + 1)) - amp;
-    if (tear % 4 == 0 && (i < c_voxlSlices) == (bool)((tear >> 20) & 1))
-        dx = (int32_t)((tear >> 8) % (2 * amp + 1)) - amp + dx / 3;
-    if (inverted)
-        *inverted = ((r >> 24) & 0xff) < 34 * g;
-    return dx;
+    bool partTear = tear % 5 == 0, letters = (tear >> 20) & 1;
+    int32_t tearDx = (int32_t)((tear >> 8) % (2 * amp + 1)) - amp;
+    for (int i = 0; i < c_slices; i++) {
+        uint32_t r = hash(step, i);
+        if (partTear && (i < c_voxlSlices) == letters) {
+            glitchDx[i] = tearDx;
+            glitchInverted[i] = false;
+        } else if ((r & 0xff) < 70 + 60 * g) {
+            bool heal = ((r >> 8) & 0xff) < 60;
+            glitchDx[i] = heal ? 0 : (int32_t)((r >> 16) % (2 * amp + 1)) - amp;
+            glitchInverted[i] = !heal && ((r >> 24) & 0xff) < 40 * g;
+        }
+    }
 }
 
 /**
- * Short white bars around the logo, n of them, new every 45 ms.
+ * Short white bars around the logo, n of them, new every 70 ms.
  */
 void noise(uint32_t t, int n)
 {
     for (int k = 0; k < n; k++) {
-        uint32_t r = hash(t / 45, 200 + k);
+        uint32_t r = hash(t / 70, 200 + k);
         int32_t x = r % 300, y = 58 + (r >> 9) % 140;
         rect(300 + k, x, y, x + 6 + (int32_t)((r >> 17) % 50), y + 2 + (int32_t)((r >> 25) % 4), white);
     }
+}
+
+/**
+ * A pulse around the node at half size h, drawn as a HUD's corner brackets: three corners, and the
+ * bottom-right one cut, as a slash. Eight primitives, and only the corners redraw as it grows.
+ */
+void bracketRing(uint16_t key, int32_t h, int32_t w)
+{
+    const int32_t x1 = c_nodeX - h, y1 = c_nodeY - h, x2 = c_nodeX + h - 1, y2 = c_nodeY + h - 1;
+    const int32_t len = LV_CLAMP(8, h / 3, 28);
+    rect(key, x1, y1, x1 + len - 1, y1 + w - 1, white); // top-left
+    rect(key + 1, x1, y1, x1 + w - 1, y1 + len - 1, white);
+    rect(key + 2, x2 - len + 1, y1, x2, y1 + w - 1, white); // top-right
+    rect(key + 3, x2 - w + 1, y1, x2, y1 + len - 1, white);
+    rect(key + 4, x1, y2 - w + 1, x1 + len - 1, y2, white); // bottom-left
+    rect(key + 5, x1, y2 - len + 1, x1 + w - 1, y2, white);
+    const int32_t X2 = x2 + 1, Y2 = y2 + 1, s = w * 3 / 2;
+    if (X2 - len - s > W || Y2 - len - s > H)
+        return;
+    tri(key + 6, {X2 - len - s, Y2}, {X2 - len, Y2}, {X2, Y2 - len - s}, white);
+    tri(key + 7, {X2 - len, Y2}, {X2, Y2 - len}, {X2, Y2 - len - s}, white);
+}
+
+// ----- a draw buffer in internal RAM, while the animation runs -----
+
+// MUI renders into one screen-sized buffer in PSRAM, which costs the animation most of its frame
+// time. Internal RAM is several times faster; the animation borrows a strip of it and gives the
+// display its own buffer back at the end. Rendering a large area just takes more strips.
+lv_draw_buf_t fastBuf;
+void *fastBufMem = nullptr;
+lv_draw_buf_t *savedBuf1 = nullptr, *savedBuf2 = nullptr;
+uint32_t savedStrideAuto = 0;
+
+void useFastBuffer(lv_display_t *disp)
+{
+#if defined(ARCH_ESP32)
+    if (disp->render_mode != LV_DISPLAY_RENDER_MODE_PARTIAL)
+        return;
+    const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    const size_t keepFree = 64 * 1024; // for the firmware, while it starts up
+    const lv_color_format_t cf = lv_display_get_color_format(disp);
+    const uint32_t stride = lv_draw_buf_width_to_stride(W, cf);
+    const size_t freeBytes = heap_caps_get_free_size(caps), largest = heap_caps_get_largest_free_block(caps);
+    uint32_t rows = 64;
+    while (rows >= 16 && ((size_t)stride * rows + keepFree > freeBytes || (size_t)stride * rows + 64 > largest))
+        rows -= 8;
+    if (rows < 16) {
+        ILOG_INFO("family boot: draw buffer stays in PSRAM (%u bytes internal free)", (unsigned)freeBytes);
+        return;
+    }
+    const size_t size = (size_t)stride * rows;
+    fastBufMem = heap_caps_aligned_alloc(LV_DRAW_BUF_ALIGN, size, caps);
+    if (!fastBufMem)
+        return;
+    lv_draw_buf_init(&fastBuf, W, rows, cf, stride, fastBufMem, size);
+    savedBuf1 = disp->buf_1;
+    savedBuf2 = disp->buf_2;
+    savedStrideAuto = disp->stride_is_auto;
+    lv_display_set_draw_buffers(disp, &fastBuf, nullptr);
+    ILOG_INFO("family boot: %u rows of draw buffer in internal RAM (%u bytes internal free)", (unsigned)rows,
+              (unsigned)freeBytes);
+#endif
+}
+
+void restoreBuffer(lv_display_t *disp)
+{
+#if defined(ARCH_ESP32)
+    if (!fastBufMem)
+        return;
+    lv_display_set_draw_buffers(disp, savedBuf1, savedBuf2);
+    disp->stride_is_auto = savedStrideAuto;
+    heap_caps_free(fastBufMem);
+    fastBufMem = nullptr;
+#endif
 }
 
 // ----- state -----
@@ -345,7 +439,17 @@ float progress = 0;      // the status bar, 0..1
 uint32_t lastT = 0;
 int32_t wipePrevE = -H;  // the wipe's edge in the previous frame
 uint32_t savedRefrPeriod = 0;
-uint32_t renders = 0, lastRender = 0, longestRender = 0;
+uint32_t family_boot_start = 0; // the boot animation's clock, for the stats
+
+// what a frame costs, summed over the animation and logged at its end
+struct Stats {
+    uint32_t renders, lastRender, longestGap;
+    uint32_t renderStartUs;
+    uint64_t renderUs, flushUs, sceneUs, px;
+    uint32_t flushes, flushStartUs, areasBefore, areasAfter, scenes;
+    uint8_t perQuarter[48];   // frames in each 250 ms
+    uint32_t renderUsQuarter[48]; // and the time spent rendering them
+} stats;
 
 /**
  * Tell LVGL the animation covers the screen, so nothing under it is drawn. Not during the wipe.
@@ -427,12 +531,38 @@ void ui_event_boot_draw(lv_event_t *e)
     }
 }
 
-void ui_event_boot_render(lv_event_t *)
+void ui_event_boot_display(lv_event_t *e)
 {
-    uint32_t now = lv_tick_get();
-    if (renders++ && now - lastRender > longestRender)
-        longestRender = now - lastRender;
-    lastRender = now;
+    switch (lv_event_get_code(e)) {
+    case LV_EVENT_RENDER_START: {
+        uint32_t now = lv_tick_get();
+        if (stats.renders++ && now - stats.lastRender > stats.longestGap)
+            stats.longestGap = now - stats.lastRender;
+        stats.lastRender = now;
+        stats.renderStartUs = micros();
+        break;
+    }
+    case LV_EVENT_RENDER_READY: {
+        uint32_t us = micros() - stats.renderStartUs;
+        stats.renderUs += us;
+        uint32_t q = lv_tick_elaps(family_boot_start) / 250;
+        if (q < sizeof(stats.perQuarter)) {
+            stats.perQuarter[q]++;
+            stats.renderUsQuarter[q] += us;
+        }
+        break;
+    }
+    case LV_EVENT_FLUSH_START:
+        stats.flushStartUs = micros();
+        stats.px += lv_area_get_size((const lv_area_t *)lv_event_get_param(e));
+        stats.flushes++;
+        break;
+    case LV_EVENT_FLUSH_FINISH:
+        stats.flushUs += micros() - stats.flushStartUs;
+        break;
+    default:
+        break;
+    }
 }
 
 /**
@@ -479,8 +609,8 @@ void diffFrames(void)
 }
 
 /**
- * Join the dirty areas until LVGL's invalidation buffer can take them: first every pair that costs
- * nothing to join, then the cheapest pairs.
+ * Join the dirty areas: every pair whose join wastes fewer pixels than another area costs, then the
+ * cheapest pairs until LVGL's invalidation buffer can take them.
  */
 void mergeDirty(void)
 {
@@ -509,7 +639,7 @@ void mergeDirty(void)
                 }
             }
         }
-        if (bi < 0 || (best > 0 && dirtyCount <= c_maxInvalid))
+        if (bi < 0 || (best > c_areaCost && dirtyCount <= c_maxInvalid))
             break;
         dirtyAreas[bi] = join(dirtyAreas[bi], dirtyAreas[bj]);
         dirtyAreas[bj] = dirtyAreas[--dirtyCount];
@@ -553,7 +683,9 @@ void FamilyScreen::startBoot(void)
         savedRefrPeriod = refr->period;
         lv_timer_set_period(refr, c_frameMs);
     }
-    lv_display_add_event_cb(disp, ui_event_boot_render, LV_EVENT_RENDER_START, nullptr);
+    lv_display_add_event_cb(disp, ui_event_boot_display, LV_EVENT_ALL, nullptr);
+    useFastBuffer(disp);
+    familyFilterBypass = true; // only black and white on the panel until the wipe
     bootTimer = lv_timer_create(timer_boot, c_frameMs, nullptr);
     assignGroup();
     ILOG_INFO("family boot animation started");
@@ -573,6 +705,7 @@ void FamilyScreen::bootFrame(void)
             return;
         started = true;
         bootStartTick = lv_tick_get();
+        family_boot_start = bootStartTick;
     }
     if (screenSaverActive())
         return; // nothing to see
@@ -599,6 +732,8 @@ void FamilyScreen::bootFrame(void)
     const uint32_t never = 0x40000000; // far enough that adding a phase does not wrap
     const uint32_t assembleEnd = outroAt < 0 ? never : outroAt + c_assemble;
     const uint32_t wipeAt = assembleEnd + c_flash + c_shake;
+    if (t >= wipeAt)
+        familyFilterBypass = false; // the family screen or MUI comes into view, in their grey levels
     if (outroAt >= 0 && !revealed) {
         // under the animation, which covers it until the wipe
         revealed = true;
@@ -620,6 +755,7 @@ void FamilyScreen::bootFrame(void)
     progress += (target - progress) * clamp01(dt / 150.0f);
 
     // ----- the scene -----
+    const uint32_t sceneStart = micros();
     memcpy(prevPrims, prims, sizeof(Prim) * primCount);
     prevPrimCount = primCount;
     primCount = 0;
@@ -654,8 +790,8 @@ void FamilyScreen::bootFrame(void)
             if (a >= 1)
                 continue;
             int32_t h = ringHalf(a);
-            int32_t w = a < 0.2f ? 4 : a < 0.45f ? 3 : a < 0.7f ? 2 : 1;
-            frameChamfer(1000 + (k % 16) * 8, c_nodeX - h, c_nodeY - h, c_nodeX + h - 1, c_nodeY + h - 1, w, h * 2 / 5, white);
+            int32_t w = a < 0.2f ? 4 : a < 0.45f ? 3 : 2;
+            bracketRing(1000 + (k % 16) * 8, h, w);
         }
     }
 
@@ -730,9 +866,11 @@ void FamilyScreen::bootFrame(void)
     // the logo
     if (t < c_glitchEnd) {
         float g = t < c_hold ? 0 : (t - c_hold) / (float)(c_glitchEnd - c_hold);
+        if (g > 0)
+            glitchTo(t, g);
         for (int i = 0; i < c_slices; i++) {
-            bool inverted = false;
-            int32_t dx = g > 0 ? glitchDx(t, i, g, &inverted) : 0;
+            bool inverted = g > 0 && glitchInverted[i];
+            int32_t dx = g > 0 ? glitchDx[i] : 0;
             if (inverted) {
                 const Slice &s = slices[i];
                 rect(100 + i, s.x + dx - 8, s.y + s.top, s.x + dx + (int32_t)s.img->header.w + 7, s.y + s.top + s.rows - 1, white);
@@ -740,23 +878,24 @@ void FamilyScreen::bootFrame(void)
             slice(120 + i, i, dx, 0, inverted ? black : white);
         }
         if (g > 0) {
-            noise(t, (int)(g * 7));
+            noise(t, (int)(g * 5));
             int32_t y = c_logoY1 + (int32_t)((t - c_hold) * 7 / 20) % (c_logoY2 - c_logoY1); // scan line
             rect(290, 0, y, W - 1, y + 1, white);
         }
     } else if (outroAt < 0 || t < (uint32_t)outroAt) {
         // shatter: off to the sides, the letters' slices alternating, still glitching as they go
+        glitchTo(t, 1);
         for (int i = 0; i < c_slices; i++) {
             float u = clamp01((float)((int32_t)(t - c_glitchEnd) - i * (int32_t)c_shatterStagger) / c_shatter);
             int32_t dir = (i & 1) ? 1 : -1;
-            int32_t dx = dir * (int32_t)(easeInCubic(u) * 340) + (int32_t)(glitchDx(t, i, 1, nullptr) * (1 - u));
+            int32_t dx = dir * (int32_t)(easeInCubic(u) * 340) + (int32_t)(glitchDx[i] * (1 - u));
             if (LV_ABS(dx) >= 330)
                 continue;
             slice(120 + i, i, dx, 0, white);
             speedLine(140 + i, i, dx, dir);
         }
         if (t < c_glitchEnd + 200)
-            noise(t, (int)(7 * (1 - (t - c_glitchEnd) / 200.0f)));
+            noise(t, (int)(5 * (1 - (t - c_glitchEnd) / 200.0f)));
     } else if (t < assembleEnd) {
         // assemble: back in from the side each slice left to, overshooting a little
         for (int i = 0; i < c_slices; i++) {
@@ -774,8 +913,8 @@ void FamilyScreen::bootFrame(void)
         bool flash = s < c_flash;
         int32_t dx = 0;
         if (!flash) {
-            float k = (s - c_flash) / (float)c_shake;
-            dx = (int32_t)lroundf(6 * (1 - k) * sinf((s - c_flash) * 0.16f));
+            static const int8_t shake[] = {5, -3, 2, 0}; // a few steps, each a full redraw of the logo
+            dx = shake[LV_MIN((s - c_flash) * 4 / c_shake, 3u)];
         }
         if (flash)
             rect(100, c_logoX1, c_logoY1, c_logoX2, c_logoY2, white);
@@ -804,6 +943,7 @@ void FamilyScreen::bootFrame(void)
     }
 
     diffFrames();
+    stats.areasBefore += dirtyCount;
     if (dirtyAll) {
         lv_obj_invalidate(bootObj);
     } else {
@@ -811,6 +951,9 @@ void FamilyScreen::bootFrame(void)
         for (int i = 0; i < dirtyCount; i++)
             lv_obj_invalidate_area(bootObj, &dirtyAreas[i]);
     }
+    stats.areasAfter += dirtyAll ? 1 : dirtyCount;
+    stats.scenes++;
+    stats.sceneUs += micros() - sceneStart;
 }
 
 void FamilyScreen::endBoot(void)
@@ -824,7 +967,9 @@ void FamilyScreen::endBoot(void)
         bootTimer = nullptr;
     }
     lv_display_t *disp = lv_display_get_default();
-    lv_display_remove_event_cb_with_user_data(disp, ui_event_boot_render, nullptr);
+    lv_display_remove_event_cb_with_user_data(disp, ui_event_boot_display, nullptr);
+    restoreBuffer(disp);
+    familyFilterBypass = false;
     if (lv_timer_t *refr = lv_display_get_refr_timer(disp))
         lv_timer_set_period(refr, savedRefrPeriod ? savedRefrPeriod : LV_DEF_REFR_PERIOD);
     lv_obj_delete(bootObj);
@@ -835,9 +980,19 @@ void FamilyScreen::endBoot(void)
     prims = prevPrims = nullptr;
     dirtyAreas = nullptr;
     primCount = prevPrimCount = 0;
-    uint32_t ms = lastRender - bootStartTick;
-    ILOG_INFO("family boot animation: %u frames in %u ms (%u fps), longest frame %u ms", (unsigned)renders, (unsigned)ms,
-              (unsigned)(ms ? renders * 1000 / ms : 0), (unsigned)longestRender);
+    const uint32_t ms = stats.lastRender - bootStartTick, n = LV_MAX(stats.renders, 1u), k = LV_MAX(stats.scenes, 1u);
+    ILOG_INFO("family boot animation: %u frames in %u ms (%u fps), longest gap %u ms", (unsigned)stats.renders, (unsigned)ms,
+              (unsigned)(ms ? stats.renders * 1000 / ms : 0), (unsigned)stats.longestGap);
+    ILOG_INFO("family boot animation, per frame: render %u us of which flush %u us, %u areas, %u px; scene %u us, %u -> %u dirty",
+              (unsigned)(stats.renderUs / n), (unsigned)(stats.flushUs / n), (unsigned)(stats.flushes / n), (unsigned)(stats.px / n),
+              (unsigned)(stats.sceneUs / k), (unsigned)(stats.areasBefore / k), (unsigned)(stats.areasAfter / k));
+    char frames[48 * 4 + 1] = "", render[48 * 5 + 1] = "";
+    for (uint32_t q = 0, f = 0, r = 0; q < sizeof(stats.perQuarter) && q * 250 <= ms; q++) {
+        f += lv_snprintf(frames + f, sizeof(frames) - f, "%u ", (unsigned)stats.perQuarter[q]);
+        r += lv_snprintf(render + r, sizeof(render) - r, "%u ", (unsigned)(stats.renderUsQuarter[q] / 1000));
+    }
+    ILOG_INFO("family boot animation, frames per 250 ms: %s", frames);
+    ILOG_INFO("family boot animation, render ms per 250 ms: %s", render);
     assignGroup();
 }
 

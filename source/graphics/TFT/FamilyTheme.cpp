@@ -23,6 +23,7 @@ constexpr int c_lowY = 40;
 constexpr int c_highY = 200;
 
 static lv_display_flush_cb_t muiFlush = nullptr;
+bool familyFilterBypass = false; // the boot animation draws only black and white; it skips the curve
 static uint8_t curve[256];
 
 static void buildCurve(void)
@@ -58,7 +59,7 @@ static inline uint16_t mono565(uint16_t c)
  */
 static void mono_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
 {
-    uint32_t n = lv_area_get_size(area);
+    uint32_t n = familyFilterBypass ? 0 : lv_area_get_size(area);
     switch (lv_display_get_color_format(disp)) {
     case LV_COLOR_FORMAT_RGB565: {
         uint16_t *p = (uint16_t *)px_map;
