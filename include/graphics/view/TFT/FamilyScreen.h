@@ -110,8 +110,15 @@ class FamilyScreen
     void installTheme(void);
     void restyleMui(void);
 
+    // boot animation (FamilyBoot.cpp): from the splash to the family screen, instead of MUI
+    void startBoot(void);
+    void bootFrame(void);
+    void endBoot(void);
+    static void timer_boot(lv_timer_t *timer);
+
     // readiness gate and dev mode
     bool ready(void);
+    void checkRestored(void);
     void tick(void);
     void enterDevMode(void);
     void leaveDevMode(void);
@@ -129,6 +136,8 @@ class FamilyScreen
   public:
     // desktop build only (FamilySim.cpp): commands from the file named by FAMILY_SIM_CMDS
     static void simCommandStatic(const char *line);
+    // every flushed area, after the display filter: records the boot animation as frames
+    static void simFrame(lv_display_t *disp, const lv_area_t *area, const uint8_t *px_map);
 
   private:
     void startSim(void);
@@ -163,12 +172,18 @@ class FamilyScreen
     lv_obj_t *textArea = nullptr;
     lv_obj_t *sendBox = nullptr;
     lv_obj_t *sendCount = nullptr;
+    lv_obj_t *bootObj = nullptr;      // the boot animation, above everything on the main screen
+    lv_timer_t *bootTimer = nullptr;
+    lv_group_t *bootGroup = nullptr;  // empty: keys during the boot animation go nowhere
 
     Page page = eHome;
     bool shown = false;            // overlay is up
     bool devMode = false;          // MUI is in front because of the chord
     bool mainScreenActive = false; // main screen (and so the overlay) is the loaded screen
     bool restored = false;         // /messages log has been read back
+    bool booting = false;          // the boot animation is up
+    uint32_t bootStartTick = 0;    // lv_tick at its start
+    uint32_t bootEndTick = 0;      // lv_tick at its end, 0 while it runs
     uint32_t alertHideAt = 0;      // millis() to clear a transient alert, 0 = keep
     uint32_t ticks = 0;            // 1s family timer runs
 

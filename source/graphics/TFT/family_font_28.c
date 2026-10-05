@@ -5,7 +5,7 @@
 /*******************************************************************************
  * Size: 28 px
  * Bpp: 4
- * Opts: --bpp 4 --size 28 --no-compress --font Montserrat-ExtraBold.ttf --range 0x20-0x7F,0xA0-0x17F,0x2026 --format lvgl --lv-include lvgl.h -o /tmp/tmpcfpfpg1p/family_font_28.c
+ * Opts: --bpp 4 --size 28 --no-compress --font Montserrat-ExtraBold.ttf --range 0x20-0x7F,0xA0-0x17F,0x2026 --format lvgl --lv-include lvgl.h -o family_font_28.c
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE

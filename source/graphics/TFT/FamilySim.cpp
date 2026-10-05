@@ -10,6 +10,8 @@
 //   chord                the dev chord: family screen <-> MUI
 //   tap <panel>          click a MUI navigation button: home nodes groups messages map settings
 //   open <name>          click a MUI object: chat0 (first chat), user, region, role, timeout, reboot
+// Set FAMILY_SIM_FRAMES to a directory to record the boot animation: every refresh from its start
+// until 600 ms after its end is written there as a PPM, named by frame number and milliseconds.
 
 #include "graphics/view/TFT/FamilyScreen.h"
 #include "graphics/view/TFT/TFTView_320x240.h"
@@ -20,6 +22,9 @@
 #include <cstring>
 
 static const char *simPath = nullptr;
+static const char *framesDir = nullptr;
+static uint8_t frame[320 * 240 * 3]; // what the panel shows, RGB
+static uint32_t frameNo = 0;
 
 static lv_group_t *keyboardGroup(void)
 {
@@ -107,8 +112,48 @@ void FamilyScreen::simCommandStatic(const char *line)
         family->simCommand(line);
 }
 
+void FamilyScreen::simFrame(lv_display_t *disp, const lv_area_t *area, const uint8_t *px_map)
+{
+    if (!framesDir || !family || !family->bootStartTick)
+        return;
+    if (!family->booting && lv_tick_elaps(family->bootEndTick) > 600)
+        return;
+    lv_color_format_t cf = lv_display_get_color_format(disp);
+    uint32_t size = lv_color_format_get_size(cf);
+    const uint8_t *p = px_map;
+    for (int32_t y = area->y1; y <= area->y2; y++) {
+        for (int32_t x = area->x1; x <= area->x2; x++, p += size) {
+            if (x < 0 || y < 0 || x >= 320 || y >= 240)
+                continue;
+            uint8_t *o = &frame[(y * 320 + x) * 3];
+            if (size == 2) {
+                uint16_t c = cf == LV_COLOR_FORMAT_RGB565_SWAPPED ? (uint16_t)((p[0] << 8) | p[1]) : (uint16_t)(p[0] | (p[1] << 8));
+                o[0] = ((c >> 11) & 0x1f) << 3;
+                o[1] = ((c >> 5) & 0x3f) << 2;
+                o[2] = (c & 0x1f) << 3;
+            } else {
+                o[0] = p[2];
+                o[1] = p[1];
+                o[2] = p[0];
+            }
+        }
+    }
+    if (!lv_display_flush_is_last(disp))
+        return;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/f%04u_%05u.ppm", framesDir, (unsigned)frameNo++, (unsigned)lv_tick_elaps(family->bootStartTick));
+    if (FILE *f = fopen(path, "wb")) {
+        fprintf(f, "P6\n320 240\n255\n");
+        fwrite(frame, 1, sizeof(frame), f);
+        fclose(f);
+    }
+}
+
 void FamilyScreen::startSim(void)
 {
+    framesDir = getenv("FAMILY_SIM_FRAMES");
+    if (framesDir && !*framesDir)
+        framesDir = nullptr;
     simPath = getenv("FAMILY_SIM_CMDS");
     if (!simPath || !*simPath)
         return;

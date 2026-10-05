@@ -5,7 +5,7 @@
 /*******************************************************************************
  * Size: 20 px
  * Bpp: 4
- * Opts: --bpp 4 --size 20 --no-compress --font Montserrat-SemiBold.ttf --range 0x20-0x7F,0xA0-0x17F,0x2026 --format lvgl --lv-include lvgl.h -o /tmp/tmptg_v0vvn/family_font_20.c
+ * Opts: --bpp 4 --size 20 --no-compress --font Montserrat-SemiBold.ttf --range 0x20-0x7F,0xA0-0x17F,0x2026 --format lvgl --lv-include lvgl.h -o family_font_20.c
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE

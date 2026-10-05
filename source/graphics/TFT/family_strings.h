@@ -42,6 +42,11 @@
 #define FAMILY_STR_ALERT_RESYNC "BIJWERKEN…"
 #define FAMILY_STR_ALERT_SHUTDOWN "UITSCHAKELEN…"
 
+// boot animation, the status block under the radio pulse (family_font_16)
+#define FAMILY_STR_BOOT_CONNECTING "VERBINDEN"
+#define FAMILY_STR_BOOT_LOADING "BERICHTEN LADEN"
+#define FAMILY_STR_BOOT_READY "KLAAR"
+
 // MUI's top bar on the home panel: the VOXL wordmark, then this
 #define FAMILY_STR_BRAND_SUFFIX "net"
 

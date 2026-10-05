@@ -107,6 +107,7 @@ void FamilyScreen::attach(TFTView_320x240 *view)
 #ifdef ARCH_PORTDUINO
     family->startSim();
 #endif
+    family->startBoot();
     ILOG_INFO("family screen attached (channel %d)", FAMILY_CHANNEL);
 }
 
@@ -184,7 +185,7 @@ void FamilyScreen::textMessageResponse(uint32_t channelOrNode, uint32_t id, bool
 
 bool FamilyScreen::hidesMessagePopup(void)
 {
-    if (!family || !family->shown)
+    if (!family || !(family->shown || family->booting))
         return false;
     // MUI's own wake for a popup; family messages already woke the screen in newMessage()
     if (family->view->db.module_config.external_notification.alert_message)
@@ -772,11 +773,12 @@ void FamilyScreen::rebuildGroup(lv_obj_t *focus)
 
 /**
  * Keyboard and trackball belong to the family group while the overlay is on the loaded screen,
- * and to MUI's default group otherwise (dev mode, blank screen, lock screen, boot screen).
+ * to nobody during the boot animation, and to MUI's default group otherwise (dev mode, blank
+ * screen, lock screen, boot screen).
  */
 void FamilyScreen::assignGroup(void)
 {
-    lv_group_t *want = (shown && mainScreenActive) ? group : lv_group_get_default();
+    lv_group_t *want = !mainScreenActive ? lv_group_get_default() : booting ? bootGroup : shown ? group : lv_group_get_default();
     for (lv_indev_t *indev = lv_indev_get_next(nullptr); indev; indev = lv_indev_get_next(indev)) {
         lv_indev_type_t type = lv_indev_get_type(indev);
         if ((type == LV_INDEV_TYPE_KEYPAD || type == LV_INDEV_TYPE_ENCODER) && lv_indev_get_group(indev) != want)
@@ -1010,10 +1012,8 @@ bool FamilyScreen::ready(void)
     return pskSize == 16 || pskSize == 32;
 }
 
-void FamilyScreen::tick(void)
+void FamilyScreen::checkRestored(void)
 {
-    hookInput();
-
     if (!restored && view->messagesRestored) {
         restored = true;
         ILOG_INFO("family: %d messages, %u unread", count, (unsigned)unread);
@@ -1021,8 +1021,16 @@ void FamilyScreen::tick(void)
         if (page == eRead)
             fillRead(count - 1);
     }
+}
 
-    if (devMode) {
+void FamilyScreen::tick(void)
+{
+    hookInput();
+    checkRestored();
+
+    if (booting) {
+        // the boot animation brings the family screen (or MUI's setup) up when it ends
+    } else if (devMode) {
         restyleMui(); // MUI recolours and creates objects at runtime
         // MUI does not outlast the screen saver: whoever wakes the device gets the family screen
         if (screenSaverActive()) {
@@ -1042,7 +1050,7 @@ void FamilyScreen::tick(void)
     }
 
     if (shown) {
-        if (lv_obj_get_index(root) != (int32_t)lv_obj_get_child_count(objects.main_screen) - 1)
+        if (!booting && lv_obj_get_index(root) != (int32_t)lv_obj_get_child_count(objects.main_screen) - 1)
             lv_obj_move_foreground(root);
         refreshStrip();
         if (page == eRead && ++ticks % 30 == 0) // relative times ("5 min geleden") move on
@@ -1180,10 +1188,14 @@ void FamilyScreen::async_toggle_dev_mode(void *)
 {
     if (!family)
         return;
-    if (family->devMode)
+    if (family->devMode) {
         family->leaveDevMode();
-    else if (family->shown)
+    } else if (family->booting) {
+        family->endBoot();
         family->enterDevMode();
+    } else if (family->shown) {
+        family->enterDevMode();
+    }
 }
 
 void FamilyScreen::timer_tick(lv_timer_t *)

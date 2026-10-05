@@ -86,6 +86,9 @@ static void mono_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_ma
     default:
         break;
     }
+#ifdef ARCH_PORTDUINO
+    FamilyScreen::simFrame(disp, area, px_map);
+#endif
     muiFlush(disp, area, px_map);
 }
 

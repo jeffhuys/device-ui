@@ -5,7 +5,7 @@
 /*******************************************************************************
  * Size: 16 px
  * Bpp: 4
- * Opts: --bpp 4 --size 16 --no-compress --font Montserrat-Bold.ttf --range 0x20-0x7F,0xA0-0x17F,0x2026 --format lvgl --lv-include lvgl.h -o /tmp/tmp1blpoop4/family_font_16.c
+ * Opts: --bpp 4 --size 16 --no-compress --font Montserrat-Bold.ttf --range 0x20-0x7F,0xA0-0x17F,0x2026 --format lvgl --lv-include lvgl.h -o family_font_16.c
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE
