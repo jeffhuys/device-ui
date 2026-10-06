@@ -69,7 +69,8 @@ constexpr lv_color_t colorMutedText = LV_COLOR_HEX(0x787878); // its text
 constexpr int32_t c_frame = 3;      // block frame width
 constexpr int32_t c_cut = 12;       // corner cut, along each edge
 constexpr int32_t c_gap = 6;        // page padding and spacing
-constexpr int32_t c_barHeight = 22; // bars and the status strip
+constexpr int32_t c_barHeight = 22;     // the status strip
+constexpr int32_t c_pageBarHeight = 32; // the bars of Lezen and Bericht sturen: tall enough for a finger on TERUG
 
 FamilyScreen *FamilyScreen::family = nullptr;
 
@@ -373,7 +374,9 @@ static lv_obj_t *createPlain(lv_obj_t *parent)
 {
     lv_obj_t *obj = lv_obj_create(parent);
     lv_obj_remove_style_all(obj);
-    lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+    // not clickable either, or a finger on a key cap, the badge or a card header lands there and not on
+    // the block around it; the objects that take a tap say so themselves
+    lv_obj_clear_flag(obj, lv_obj_flag_t(LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE));
     return obj;
 }
 
@@ -400,16 +403,35 @@ static lv_obj_t *createPage(lv_obj_t *parent)
 }
 
 /**
- * Inverted bar, like the NETWORK block of the logo: white, bold black title left, a label right.
- * Returns the right-hand label.
+ * Inverted bar, like the NETWORK block of the logo: white, a black TERUG block for touch on the left,
+ * the bold black title next to it, a label right. Returns the right-hand label.
+ * TERUG is for the finger only: it is in no group, the trackball and keys keep their own way back.
  */
-static lv_obj_t *createBar(lv_obj_t *parent, const char *title)
+static lv_obj_t *createBar(lv_obj_t *parent, const char *title, lv_event_cb_t back)
 {
     lv_obj_t *bar = createPlain(parent);
-    lv_obj_set_size(bar, lv_pct(100), c_barHeight);
+    lv_obj_set_size(bar, lv_pct(100), c_pageBarHeight);
     lv_obj_add_style(bar, &styleBar, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_left(bar, 3, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_t *button = createPlain(bar);
+    lv_obj_set_size(button, LV_SIZE_CONTENT, c_pageBarHeight - 6);
+    lv_obj_set_align(button, LV_ALIGN_LEFT_MID);
+    lv_obj_set_style_bg_opa(button, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(button, colorBlack, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(button, colorWhite, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_hor(button, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(button, colorWhite, LV_PART_MAIN | LV_STATE_PRESSED); // the finger sees it land
+    lv_obj_set_style_text_color(button, colorBlack, LV_PART_MAIN | LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(button, 2, LV_PART_MAIN | LV_STATE_PRESSED);
+    lv_obj_set_style_border_color(button, colorBlack, LV_PART_MAIN | LV_STATE_PRESSED);
+    lv_obj_add_flag(button, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(button, LV_OBJ_FLAG_CLICK_FOCUSABLE); // a tap must not leave it marked focused
+    lv_obj_set_ext_click_area(button, 3);                   // to the bar's edges
+    lv_obj_add_event_cb(button, back, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *label = createLabel(button, &family_font_16, FAMILY_STR_HINT_BACK);
+    lv_obj_set_align(label, LV_ALIGN_CENTER);
     lv_obj_t *left = createLabel(bar, &family_font_16, title);
-    lv_obj_set_align(left, LV_ALIGN_LEFT_MID);
+    lv_obj_align_to(left, button, LV_ALIGN_OUT_RIGHT_MID, 8, 0);
     lv_obj_t *right = createLabel(bar, &family_font_14, "");
     lv_obj_set_align(right, LV_ALIGN_RIGHT_MID);
     return right;
@@ -590,6 +612,7 @@ void FamilyScreen::buildHome(void)
         lv_obj_set_align(rowLabels[i], LV_ALIGN_LEFT_MID);
     }
     lv_obj_add_state(rows[0], LV_STATE_DISABLED);
+    lv_obj_clear_flag(rows[0], LV_OBJ_FLAG_CLICKABLE);
 
     // the unread count, a solid block at the end of row 1
     badge = createPlain(rows[0]);
@@ -623,14 +646,14 @@ void FamilyScreen::styleBadge(void)
 void FamilyScreen::buildRead(void)
 {
     readPage = createPage(root);
-    readPosition = createBar(readPage, FAMILY_STR_READ_TITLE);
+    readPosition = createBar(readPage, FAMILY_STR_READ_TITLE, ui_event_back);
 
     readList = createPlain(readPage);
     lv_obj_set_width(readList, lv_pct(100));
     lv_obj_set_flex_grow(readList, 1);
     lv_obj_set_flex_flow(readList, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(readList, c_gap, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_add_flag(readList, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(readList, lv_obj_flag_t(LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE)); // a swipe between cards scrolls too
     lv_obj_set_scroll_dir(readList, LV_DIR_VER);
     lv_obj_set_scroll_snap_y(readList, LV_SCROLL_SNAP_START); // a card starts right under the bar, no slivers
     lv_obj_set_scrollbar_mode(readList, LV_SCROLLBAR_MODE_ACTIVE);
@@ -643,7 +666,7 @@ void FamilyScreen::buildRead(void)
 void FamilyScreen::buildSend(void)
 {
     sendPage = createPage(root);
-    sendCount = createBar(sendPage, FAMILY_STR_SEND_TITLE);
+    sendCount = createBar(sendPage, FAMILY_STR_SEND_TITLE, ui_event_back);
 
     // the focusable box; the text area inside is fed by hand so LVGL's encoder edit mode never applies
     sendBox = createPlain(sendPage);
@@ -668,16 +691,30 @@ void FamilyScreen::buildSend(void)
     lv_obj_set_style_border_width(textArea, 3, LV_PART_CURSOR | LV_STATE_FOCUSED);
     lv_obj_set_style_border_side(textArea, LV_BORDER_SIDE_LEFT, LV_PART_CURSOR | LV_STATE_FOCUSED);
 
-    // key hints: [ENTER] VERSTUREN   [WIS] TERUG
+    // [ENTER] VERSTUREN, a button for the finger as well as the key hint; [WIS] TERUG, a hint
     lv_obj_t *keys = createPlain(sendPage);
     lv_obj_set_size(keys, lv_pct(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(keys, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(keys, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(keys, 5, LV_PART_MAIN | LV_STATE_DEFAULT);
-    createChip(keys, FAMILY_STR_KEY_SEND);
-    createLabel(keys, &family_font_14, FAMILY_STR_HINT_SEND);
+    lv_obj_t *sendButton = createPlain(keys);
+    lv_obj_set_size(sendButton, LV_SIZE_CONTENT, c_pageBarHeight);
+    lv_obj_add_style(sendButton, &styleBlock, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_add_style(sendButton, &styleBlockFocused, LV_PART_MAIN | LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(sendButton, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_left(sendButton, 4, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_right(sendButton, 12, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_flex_flow(sendButton, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(sendButton, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(sendButton, 6, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_add_flag(sendButton, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(sendButton, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    lv_obj_add_event_cb(sendButton, ui_event_send_button, LV_EVENT_CLICKED, nullptr);
+    chamfer(sendButton);
+    createChip(sendButton, FAMILY_STR_KEY_SEND);
+    createLabel(sendButton, &family_font_16, FAMILY_STR_HINT_SEND);
     lv_obj_t *spacer = createPlain(keys);
-    lv_obj_set_size(spacer, 10, 1);
+    lv_obj_set_size(spacer, 6, 1);
     createChip(keys, FAMILY_STR_KEY_BACK);
     createLabel(keys, &family_font_14, FAMILY_STR_HINT_BACK);
 }
@@ -736,10 +773,14 @@ void FamilyScreen::refreshHome(bool resetFocus)
         lv_label_set_text_fmt(badgeLabel, FAMILY_STR_COUNT, (unsigned)unread);
     else
         lv_label_set_text(badgeLabel, FAMILY_STR_COUNT_LOADING);
-    if (hasUnread)
+    // a disabled row takes no tap either: outside the group, LVGL would mark a tapped row focused
+    if (hasUnread) {
         lv_obj_remove_state(rows[0], LV_STATE_DISABLED);
-    else
+        lv_obj_add_flag(rows[0], LV_OBJ_FLAG_CLICKABLE);
+    } else {
         lv_obj_add_state(rows[0], LV_STATE_DISABLED);
+        lv_obj_clear_flag(rows[0], LV_OBJ_FLAG_CLICKABLE);
+    }
 
     if (page == eHome) {
         lv_obj_t *focused = lv_group_get_focused(group);
@@ -1421,11 +1462,34 @@ void FamilyScreen::ui_event_row(lv_event_t *e)
     }
 }
 
+/**
+ * True while the event comes from the touch screen. A tap only selects: on the T-Deck the finger
+ * scrolls and taps where the trackball or Enter would act, so cards and the send box act on those only.
+ */
+static bool byTouch(void)
+{
+    lv_indev_t *indev = lv_indev_active();
+    return indev && lv_indev_get_type(indev) == LV_INDEV_TYPE_POINTER;
+}
+
+void FamilyScreen::ui_event_back(lv_event_t *e)
+{
+    if (family && lv_event_get_code(e) == LV_EVENT_CLICKED)
+        family->goHome();
+}
+
+void FamilyScreen::ui_event_send_button(lv_event_t *e)
+{
+    if (family && lv_event_get_code(e) == LV_EVENT_CLICKED)
+        family->send();
+}
+
 void FamilyScreen::ui_event_card(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_CLICKED) {
-        family->goHome();
+        if (!byTouch())
+            family->goHome();
     } else if (code == LV_EVENT_FOCUSED) {
         int i = (int)(intptr_t)((lv_obj_t *)lv_event_get_current_target(e))->user_data;
         if (i >= 0)
@@ -1442,7 +1506,8 @@ void FamilyScreen::ui_event_send_box(lv_event_t *e)
     FamilyScreen &f = *family;
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_CLICKED) {
-        f.send(); // trackball press, or Enter (which arrives as KEY then CLICKED)
+        if (!byTouch())
+            f.send(); // trackball press, or Enter (which arrives as KEY then CLICKED); a tap only selects
         return;
     }
     if (code != LV_EVENT_KEY)

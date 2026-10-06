@@ -10,6 +10,9 @@
 //   chord                the dev chord: family screen <-> MUI
 //   tap <panel>          click a MUI navigation button: home nodes groups messages map settings
 //   open <name>          click a MUI object: chat0 (first chat), user, region, role, timeout, reboot
+//   touch <x> <y>        a finger tap at screen pixel x, y, through a pointer input of its own (as the
+//                        T-Deck's touch screen: LVGL's press, release and click, and the indev type)
+//   swipe <x> <y> <dy>   press at x, y, move dy pixels (negative: up) in steps, release: a scroll
 // Set FAMILY_SIM_FRAMES to a directory to record the boot animation: every refresh from its start
 // until 600 ms after its end is written there as a PPM, named by frame number and milliseconds.
 
@@ -25,6 +28,35 @@ static const char *simPath = nullptr;
 static const char *framesDir = nullptr;
 static uint8_t frame[320 * 240 * 3]; // what the panel shows, RGB
 static uint32_t frameNo = 0;
+
+// the pretend touch screen: a list of (x, y, pressed) samples, one taken per read
+struct TouchSample {
+    int16_t x, y;
+    bool pressed;
+};
+static TouchSample touchQueue[64];
+static int touchHead = 0, touchTail = 0;
+static TouchSample touchLast = {0, 0, false};
+
+static void touchPush(int x, int y, bool pressed)
+{
+    int next = (touchTail + 1) % 64;
+    if (next == touchHead)
+        return;
+    touchQueue[touchTail] = {(int16_t)x, (int16_t)y, pressed};
+    touchTail = next;
+}
+
+static void touch_read(lv_indev_t *, lv_indev_data_t *data)
+{
+    if (touchHead != touchTail) {
+        touchLast = touchQueue[touchHead];
+        touchHead = (touchHead + 1) % 64;
+    }
+    data->point.x = touchLast.x;
+    data->point.y = touchLast.y;
+    data->state = touchLast.pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+}
 
 static lv_group_t *keyboardGroup(void)
 {
@@ -81,6 +113,21 @@ void FamilyScreen::simCommand(const char *line)
             lv_obj_send_event(obj, LV_EVENT_CLICKED, nullptr);
         else
             ILOG_WARN("family sim: nothing to open for '%s'", name);
+    } else if (strncmp(line, "touch ", 6) == 0) {
+        int x = 0, y = 0;
+        if (sscanf(line + 6, "%d %d", &x, &y) == 2) {
+            for (int i = 0; i < 3; i++)
+                touchPush(x, y, true);
+            touchPush(x, y, false);
+        }
+    } else if (strncmp(line, "swipe ", 6) == 0) {
+        int x = 0, y = 0, dy = 0;
+        if (sscanf(line + 6, "%d %d %d", &x, &y, &dy) == 3) {
+            touchPush(x, y, true);
+            for (int i = 1; i <= 10; i++)
+                touchPush(x, y + dy * i / 10, true);
+            touchPush(x, y + dy, false);
+        }
     } else if (*line) {
         ILOG_WARN("family sim: unknown command '%s'", line);
     }
@@ -159,6 +206,9 @@ void FamilyScreen::startSim(void)
         return;
     ILOG_INFO("family sim: reading commands from %s", simPath);
     lv_timer_create(timer_sim, 100, nullptr);
+    lv_indev_t *touch = lv_indev_create();
+    lv_indev_set_type(touch, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_read_cb(touch, touch_read);
 }
 
 #endif

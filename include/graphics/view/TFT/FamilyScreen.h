@@ -156,6 +156,8 @@ class FamilyScreen
     static void ui_event_row(lv_event_t *e);
     static void ui_event_card(lv_event_t *e);
     static void ui_event_send_box(lv_event_t *e);
+    static void ui_event_back(lv_event_t *e);
+    static void ui_event_send_button(lv_event_t *e);
 
     static FamilyScreen *family;
 

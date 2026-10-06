@@ -28,7 +28,7 @@
 #define FAMILY_STR_DAYS_AGO "%u DAGEN GELEDEN"
 
 // send (family_font_16 bar, family_font_20 text, family_font_14 key hints)
-#define FAMILY_STR_SEND_TITLE "BERICHT AAN IEDEREEN"
+#define FAMILY_STR_SEND_TITLE "AAN IEDEREEN" // after TERUG; the home row already says BERICHT STUREN
 #define FAMILY_STR_KEY_SEND "ENTER"
 #define FAMILY_STR_HINT_SEND "VERSTUREN"
 #define FAMILY_STR_KEY_BACK "WIS"
