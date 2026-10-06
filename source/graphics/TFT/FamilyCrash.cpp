@@ -6,7 +6,10 @@
 // dump. So this keeps two things in RTC memory, which a watchdog or software reset leaves alone:
 // - from the panic handler (wrapped with -Wl,--wrap=esp_panic_handler): the reason, the core, and the
 //   call chain of both cores, as raw program counters for addr2line against the flashed build's ELF;
-// - breadcrumbs, refreshed all the time: each core's last FreeRTOS tick with the task it was running,
+//   Only the first entry counts: the handler goes on to write a core dump, which can panic again, and
+//   that nested entry would describe the core dump code instead (seen on the first test crash);
+// - breadcrumbs, refreshed all the time: how many ticks each core has taken (its own count; FreeRTOS's
+//   tick count stops for both when core 0 stops) and the task it was running at the last one,
 //   the family screen's last 1 s tick and input read, and since when the trackball was held. If the
 //   panic handler never ran (a core stuck on the bus), these still say which core stopped and when.
 // familyCrashReport() logs it all at the next boot, appends it to /family_crash.bin (the last
@@ -43,7 +46,7 @@ struct Core {
 struct Notes {
     uint32_t magic;
     // panic
-    uint32_t panicked, core, exception, pseudo, exccause, excvaddr;
+    uint32_t panicked, nested, core, exception, pseudo, exccause, excvaddr;
     char reason[40];
     Core cores[2];
     // breadcrumbs
@@ -58,7 +61,7 @@ bool hooked = false;
 constexpr const char *c_file = "/family_crash.bin";
 constexpr int c_keep = 8;         // records kept in the file
 constexpr size_t c_maxRecord = 200; // fits one PKI-encrypted packet with room to spare
-constexpr uint8_t c_version = 1;
+constexpr uint8_t c_version = 2; // 2: per-core tick counts instead of the shared tick count, nested panics
 
 void put8(uint8_t *&p, uint32_t v)
 {
@@ -89,7 +92,7 @@ size_t pack(uint8_t *buf, uint32_t seq, int reason)
     put32(p, seq);
     put32(p, buildId());
     put8(p, reason);
-    put8(p, (notes.panicked ? 1 : 0) | (notes.ballDownMs ? 2 : 0) | (notes.pseudo ? 4 : 0));
+    put8(p, (notes.panicked ? 1 : 0) | (notes.ballDownMs ? 2 : 0) | (notes.pseudo ? 4 : 0) | (notes.nested ? 8 : 0));
     put8(p, notes.core);
     put8(p, notes.exception);
     put8(p, notes.exccause);
@@ -170,7 +173,7 @@ void IRAM_ATTR copyName(char *to, const char *from)
 
 void IRAM_ATTR tickCore(int cpu)
 {
-    notes.tick[cpu] = xTaskGetTickCountFromISR();
+    notes.tick[cpu]++;
     TaskHandle_t t = xTaskGetCurrentTaskHandleForCPU(cpu);
     copyName(notes.task[cpu], t ? pcTaskGetName(t) : "-");
 }
@@ -205,6 +208,11 @@ extern "C" void __real_esp_panic_handler(panic_info_t *info);
 
 extern "C" void IRAM_ATTR __wrap_esp_panic_handler(panic_info_t *info)
 {
+    if (notes.magic == c_magic && notes.panicked) {
+        notes.nested++;
+        __real_esp_panic_handler(info);
+        return;
+    }
     notes.magic = c_magic;
     notes.panicked = 1;
     notes.core = info->core;
@@ -240,12 +248,12 @@ void familyCrashReport(void)
                   (int)reason, (unsigned)notes.screenTickMs, (unsigned)notes.inputReadMs,
                   notes.ballDownMs ? "held since " : "not held", (unsigned)notes.ballDownMs);
         for (int cpu = 0; cpu < 2; cpu++)
-            ILOG_WARN("family: before this reset: core %d last tick %u, running %s", cpu, (unsigned)notes.tick[cpu],
+            ILOG_WARN("family: before this reset: core %d took %u ticks, the last one in %s", cpu, (unsigned)notes.tick[cpu],
                       notes.task[cpu]);
         if (notes.panicked) {
-            ILOG_WARN("family: panic on core %u: %s (exception %u%s, EXCCAUSE %u, EXCVADDR 0x%08x)", (unsigned)notes.core,
+            ILOG_WARN("family: panic on core %u: %s (exception %u%s, EXCCAUSE %u, EXCVADDR 0x%08x), %u nested", (unsigned)notes.core,
                       notes.reason, (unsigned)notes.exception, notes.pseudo ? ", pseudo" : "", (unsigned)notes.exccause,
-                      (unsigned)notes.excvaddr);
+                      (unsigned)notes.excvaddr, (unsigned)notes.nested);
             for (int core = 0; core < 2; core++) {
                 const Core &c = notes.cores[core];
                 if (!c.valid || c.depth > c_depth) {
