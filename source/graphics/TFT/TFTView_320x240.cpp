@@ -5767,6 +5767,9 @@ void TFTView_320x240::handleTextMessageResponse(uint32_t channelOrNode, const ui
 void TFTView_320x240::packetReceived(const meshtastic_MeshPacket &p)
 {
     MeshtasticView::packetReceived(p);
+#ifdef FAMILY_UI
+    FamilyScreen::packetReceived(p);
+#endif
 
     // try update time from packet
     if (!VALID_TIME(actTime) && VALID_TIME(p.rx_time))

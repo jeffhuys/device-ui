@@ -102,6 +102,9 @@ class ViewController
     // handle meshPacket
     bool packetReceived(const meshtastic_MeshPacket &p);
 
+#ifdef FAMILY_UI
+    friend class FamilyScreen; // answers the health monitor's crash-notes request through the client
+#endif
     MeshtasticView *view;
     LogRotate log;
     IClientBase *client;

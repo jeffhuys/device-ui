@@ -10,6 +10,7 @@
 #endif
 
 #include "lvgl.h"
+#include "mesh-pb-constants.h"
 #include "util/LogMessage.h"
 #include <stdint.h>
 
@@ -42,6 +43,8 @@ class FamilyScreen
     // EncoderInputDriver's trackball interrupts: true if this pin fires far faster than a hand can roll;
     // its interrupt is then paused, and resumed by the 1 s tick (FamilyScreen.cpp, "interrupt storms")
     static bool isrStorm(uint8_t pin);
+    // TFTView_320x240::packetReceived(): every decoded packet; answers the crash-notes request (FamilyCrash.cpp)
+    static void packetReceived(const meshtastic_MeshPacket &p);
 
   private:
     enum Page { eHome, eRead, eSend };

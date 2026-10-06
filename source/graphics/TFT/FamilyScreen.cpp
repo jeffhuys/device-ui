@@ -8,6 +8,7 @@
 #include "LittleFS.h"
 #endif
 #include "Arduino.h"
+#include "graphics/common/ViewController.h"
 #include "graphics/driver/DisplayDriver.h"
 #include "graphics/view/TFT/TFTView_320x240.h"
 #include "family_strings.h"
@@ -32,6 +33,7 @@ extern fs::FS &persistentFS; // ViewController.cpp, the filesystem that holds /m
 #if defined(ARCH_ESP32)
 void familyCrumb(int what, uint32_t value); // FamilyCrash.cpp: 0 screen tick, 1 input read, 2 trackball held since
 void familyCrashReport(void);
+size_t familyCrashRecord(uint32_t after, uint8_t *out, size_t max, uint8_t *remaining);
 #define FAMILY_CRUMB(W, V) familyCrumb(W, V)
 #else
 #define FAMILY_CRUMB(W, V)
@@ -1118,6 +1120,45 @@ bool FamilyScreen::isrStorm(uint8_t)
 void FamilyScreen::resumeStormPins(void) {}
 #endif
 
+// ===== crash notes over the air =====
+//
+// The health monitor asks a node that restarted for the crash records FamilyCrash.cpp stored: a direct
+// packet on c_crashPort with "C" and a uint32 sequence number, answered with "R", how many more records
+// follow, and the oldest record above that number (or none). The request carries no want_response:
+// with it the firmware itself answers NO_RESPONSE, since none of its modules handles the port.
+
+constexpr uint32_t c_crashPort = 290; // a private app port (256-511); scripts/health.py CRASH_PORT
+
+void FamilyScreen::packetReceived(const meshtastic_MeshPacket &p)
+{
+    if (!family || p.decoded.portnum != (meshtastic_PortNum)c_crashPort || p.to != family->view->ownNode)
+        return;
+    const auto &in = p.decoded.payload;
+    if (in.size < 5 || in.bytes[0] != 'C')
+        return;
+    uint32_t after = in.bytes[1] | in.bytes[2] << 8 | in.bytes[3] << 16 | (uint32_t)in.bytes[4] << 24;
+    meshtastic_ToRadio to = meshtastic_ToRadio_init_zero;
+    to.which_payload_variant = meshtastic_ToRadio_packet_tag;
+    meshtastic_MeshPacket &out = to.packet;
+    out.to = p.from;
+    out.channel = p.channel;
+    out.want_ack = true;
+    out.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
+    out.decoded.portnum = (meshtastic_PortNum)c_crashPort;
+    out.decoded.request_id = p.id;
+    uint8_t remaining = 0;
+    size_t len = 0;
+#if defined(ARCH_ESP32)
+    len = familyCrashRecord(after, out.decoded.payload.bytes + 2, sizeof(out.decoded.payload.bytes) - 2, &remaining);
+#endif
+    out.decoded.payload.bytes[0] = 'R';
+    out.decoded.payload.bytes[1] = remaining;
+    out.decoded.payload.size = 2 + len;
+    ILOG_INFO("family: crash notes asked by 0x%08x after record %u: %u bytes, %u more", p.from, (unsigned)after,
+              (unsigned)len, (unsigned)remaining);
+    family->view->controller->client->send(std::move(to));
+}
+
 void FamilyScreen::checkRestored(void)
 {
     if (!restored && view->messagesRestored) {
@@ -1245,6 +1286,16 @@ void FamilyScreen::trackBall(void)
             logged = 0;
         while (logged < 4 && held >= marks[logged])
             ILOG_INFO("family: ball held %u ms", (unsigned)marks[logged++]);
+#ifdef FAMILY_CRASH_TEST
+        // test builds only: a 5 s hold hangs this core with interrupts off, an interrupt watchdog reset on purpose
+        if (held >= 5000) {
+            ILOG_WARN("family: crash test, hanging with interrupts off");
+            delay(50);
+            portDISABLE_INTERRUPTS();
+            for (;;) {
+            }
+        }
+#endif
     } else {
         ballDownSince = 0;
     }
