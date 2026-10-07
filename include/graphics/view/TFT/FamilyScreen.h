@@ -212,7 +212,7 @@ class FamilyScreen
     lv_obj_t *welcomeNextLabel = nullptr;
     lv_obj_t *welcomeContent = nullptr;   // the text column; narrower on page 1, beside the model
     lv_obj_t *welcomeModel = nullptr;     // canvas with the wireframe
-    uint16_t *modelBuf = nullptr;
+    uint8_t *modelBuf = nullptr; // 8-bit grey (L8)
     lv_timer_t *modelTimer = nullptr;
     bool modelRunning = false;
     uint32_t modelStartTick = 0;

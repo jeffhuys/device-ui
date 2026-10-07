@@ -41,6 +41,29 @@ static void buildCurve(void)
     }
 }
 
+/**
+ * The grey to draw so that the panel shows `v` after the curve: its inverse (the darkest input that
+ * reaches v). For the welcome's model (FamilyModel.cpp), which fades and anti-aliases in grey.
+ * `v` itself while the filter is not in the way.
+ */
+uint8_t familyFilterInverse(uint8_t v)
+{
+    static uint8_t inverse[256];
+    static bool built = false;
+    if (!muiFlush || familyFilterBypass)
+        return v;
+    if (!built) {
+        int y = 0;
+        for (int want = 0; want < 256; want++) {
+            while (y < 255 && curve[y] < want)
+                y++;
+            inverse[want] = (uint8_t)y;
+        }
+        built = true;
+    }
+    return inverse[v];
+}
+
 static inline uint8_t monoY(uint8_t r, uint8_t g, uint8_t b)
 {
     return curve[(r * 77 + g * 150 + b * 29) >> 8];

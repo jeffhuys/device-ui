@@ -108,8 +108,8 @@ static void modelSpeedUp(bool on)
     }
 }
 
-constexpr uint32_t c_modelDelayMs = 800, c_modelFadeMs = 1500; // a moment of nothing, then it materialises
-void familyModelDraw(uint16_t *buf, int w, int h, uint32_t ms, int fade, int *x0, int *y0, int *x1, int *y1); // FamilyModel.cpp
+constexpr uint32_t c_modelDelayMs = 800, c_modelFadeMs = 3000; // a moment of nothing, then it fades in (the user: 3 s)
+void familyModelDraw(uint8_t *buf, int w, int h, uint32_t ms, int level, int *x0, int *y0, int *x1, int *y1); // FamilyModel.cpp
 void familyModelFree(void);
 constexpr uint32_t c_markerMagic = 0x464d5231;           // "FMR1"
 constexpr uint32_t c_chordHoldMs = 1000;                 // trackball held before P counts
@@ -1377,13 +1377,13 @@ void FamilyScreen::finishWelcome(bool sayHello)
 void FamilyScreen::startModel(void)
 {
     if (!modelBuf) {
-        size_t size = (size_t)c_modelW * c_modelH * sizeof(uint16_t);
+        size_t size = (size_t)c_modelW * c_modelH; // 8-bit grey
 #if defined(ARCH_ESP32)
-        modelBuf = (uint16_t *)heap_caps_aligned_alloc(LV_DRAW_BUF_ALIGN, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        modelBuf = (uint8_t *)heap_caps_aligned_alloc(LV_DRAW_BUF_ALIGN, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
         if (!modelBuf)
-            modelBuf = (uint16_t *)heap_caps_aligned_alloc(LV_DRAW_BUF_ALIGN, size, MALLOC_CAP_SPIRAM);
+            modelBuf = (uint8_t *)heap_caps_aligned_alloc(LV_DRAW_BUF_ALIGN, size, MALLOC_CAP_SPIRAM);
 #else
-        modelBuf = (uint16_t *)malloc(size);
+        modelBuf = (uint8_t *)malloc(size);
 #endif
         if (!modelBuf) {
             ILOG_WARN("family: no memory for the welcome model");
@@ -1397,7 +1397,7 @@ void FamilyScreen::startModel(void)
         lv_obj_add_flag(welcomeModel, LV_OBJ_FLAG_FLOATING); // outside the column's flow, top right under the strip
         lv_obj_clear_flag(welcomeModel, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_align(welcomeModel, LV_ALIGN_TOP_RIGHT, 0, c_barHeight + c_gap);
-        lv_canvas_set_buffer(welcomeModel, modelBuf, c_modelW, c_modelH, LV_COLOR_FORMAT_RGB565);
+        lv_canvas_set_buffer(welcomeModel, modelBuf, c_modelW, c_modelH, LV_COLOR_FORMAT_L8);
         modelDirty = {0, 0, -1, -1};
     }
     lv_obj_set_width(welcomeContent, lv_display_get_horizontal_resolution(nullptr) - 2 * c_gap - c_modelW - 4);
@@ -1410,7 +1410,7 @@ void FamilyScreen::startModel(void)
         modelStartTick = 0; // the clock starts at the first frame that can be seen (timer_model)
         modelFrames = modelDrawUs = 0;
         // back on page 1: the pause and the fade again, so the last frame from before must not show meanwhile
-        memset(modelBuf, 0, (size_t)c_modelW * c_modelH * sizeof(uint16_t));
+        memset(modelBuf, 0, (size_t)c_modelW * c_modelH);
         modelDirty = {0, 0, -1, -1};
         lv_obj_invalidate(welcomeModel);
     }
@@ -1472,12 +1472,14 @@ void FamilyScreen::timer_model(lv_timer_t *)
     if (elapsed < c_modelDelayMs)
         return;
     uint32_t shown = elapsed - c_modelDelayMs;
-    int fade = shown >= c_modelFadeMs ? 16 : 1 + (int)(shown * 16 / c_modelFadeMs);
+    // eased: up slowly out of the dark, quicker through the middle, settling softly into white
+    float t = shown >= c_modelFadeMs ? 1.0f : (float)shown / c_modelFadeMs;
+    int level = (int)(256 * t * t * (3 - 2 * t));
 #if defined(ARCH_ESP32)
     int64_t us0 = esp_timer_get_time();
 #endif
     int x0, y0, x1, y1;
-    familyModelDraw(f.modelBuf, c_modelW, c_modelH, shown, fade, &x0, &y0, &x1, &y1);
+    familyModelDraw(f.modelBuf, c_modelW, c_modelH, shown, level, &x0, &y0, &x1, &y1);
 #if defined(ARCH_ESP32)
     f.modelDrawUs += (uint32_t)(esp_timer_get_time() - us0);
 #endif

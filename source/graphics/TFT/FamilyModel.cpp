@@ -8,19 +8,21 @@
 // chevrons, the keyboard's keys, the switch, reset button and USB-C port on the edges.
 //
 // Every frame rotates the edges (a turn about the vertical axis, a fixed tilt so the top edge shows),
-// projects them with a little perspective and draws them as 1-pixel lines, white on black, straight
-// into an RGB565 buffer that LVGL shows as a canvas. Our own lines and not LVGL's: LVGL anti-aliases,
-// and the black and white panel filter would turn the grey edge pixels into a ragged line.
+// projects them with a little perspective and draws them as anti-aliased lines (Xiaolin Wu's), white on
+// black, on the projected sub-pixel coordinates, into an 8-bit grey (L8) buffer that LVGL shows as a
+// canvas. The anti-aliasing is what lets the slow turn glide instead of stepping a whole pixel at a time.
 //
-// Fading in: the panel is black and white, so there is no grey to fade through. An ordered dither
-// stands in for it: a pixel of the model shows only where a 4 x 4 Bayer threshold is below the fade
-// level, so the wireframe materialises out of scattered dots over 16 steps.
+// The display filter (FamilyTheme.cpp) is a contrast curve, not a threshold: grey survives between its
+// black and white points. Every grey is drawn through the curve's inverse (familyFilterInverse), so the
+// panel shows the grey that was meant: the edge coverage, and the fade-in, which brings the lines up
+// from black to white over a few seconds.
 //
 // Hidden lines: the body is convex, so a face is visible when it faces the camera. A body edge is
 // solid when one of its two faces is visible and dotted when neither is; the screen, keys and the
 // other details are drawn only while their face is visible.
 
 #include "lvgl.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -171,23 +173,31 @@ V3 rotate(const View &v, const V3 &p)
     return {x1, y2, z2};
 }
 
-// the pixel buffer, the fade level (0..16) and the box of what this frame drew
+// the pixel buffer (grey levels), this frame's brightness (0..256) and the box of what it drew
 struct Target {
-    uint16_t *buf;
+    uint8_t *buf;
     int w, h;
-    int fade;
+    int level;
     int x0, y0, x1, y1;
 };
 
-constexpr uint8_t c_bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+uint8_t panelGrey[256]; // the grey to draw for each grey the panel should show: the display filter inverted
+uint8_t coverage[65];   // edge coverage in 64ths -> 0..255, with a gamma so a half-covered pixel does not look faint
 
-void plot(Target &t, int x, int y)
+void plot(Target &t, int x, int y, float c)
 {
     if ((unsigned)x >= (unsigned)t.w || (unsigned)y >= (unsigned)t.h)
         return;
-    if (c_bayer[y & 3][x & 3] >= t.fade)
+    int q = (int)(c * 64 + 0.5f);
+    if (q <= 0)
         return;
-    t.buf[y * t.w + x] = 0xffff;
+    int v = coverage[q > 64 ? 64 : q] * t.level >> 8;
+    if (v <= 0)
+        return;
+    uint8_t grey = panelGrey[v > 255 ? 255 : v];
+    uint8_t &p = t.buf[y * t.w + x];
+    if (grey > p) // where lines cross, the brighter one
+        p = grey;
     if (x < t.x0)
         t.x0 = x;
     if (x > t.x1)
@@ -198,39 +208,73 @@ void plot(Target &t, int x, int y)
         t.y1 = y;
 }
 
-// Bresenham; dotted lines draw one pixel in three
-void line(Target &t, int x0, int y0, int x1, int y1, bool dotted)
+float fpart(float v)
 {
-    int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
-    int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
-    int err = dx + dy;
-    for (int step = 0;; step++) {
-        if (!dotted || step % 3 == 0)
-            plot(t, x0, y0);
-        if (x0 == x1 && y0 == y1)
-            break;
-        int e2 = 2 * err;
-        if (e2 >= dy) {
-            err += dy;
-            x0 += sx;
-        }
-        if (e2 <= dx) {
-            err += dx;
-            y0 += sy;
-        }
+    return v - floorf(v);
+}
+
+// Xiaolin Wu's line on sub-pixel end points; dotted lines draw one step in three
+void line(Target &t, float x0, float y0, float x1, float y1, bool dotted)
+{
+    bool steep = fabsf(y1 - y0) > fabsf(x1 - x0);
+    if (steep) {
+        std::swap(x0, y0);
+        std::swap(x1, y1);
+    }
+    if (x0 > x1) {
+        std::swap(x0, x1);
+        std::swap(y0, y1);
+    }
+    auto put = [&](int a, int b, float c) {
+        if (steep)
+            plot(t, b, a, c);
+        else
+            plot(t, a, b, c);
+    };
+    float dx = x1 - x0, gradient = dx == 0 ? 1 : (y1 - y0) / dx;
+
+    float xend = roundf(x0), yend = y0 + gradient * (xend - x0), xgap = 1 - fpart(x0 + 0.5f);
+    int xa = (int)xend, ya = (int)floorf(yend);
+    put(xa, ya, (1 - fpart(yend)) * xgap);
+    put(xa, ya + 1, fpart(yend) * xgap);
+    float inter = yend + gradient;
+
+    xend = roundf(x1);
+    yend = y1 + gradient * (xend - x1);
+    xgap = fpart(x1 + 0.5f);
+    int xb = (int)xend, yb = (int)floorf(yend);
+    if (!dotted || (xb - xa) % 3 == 0) {
+        put(xb, yb, (1 - fpart(yend)) * xgap);
+        put(xb, yb + 1, fpart(yend) * xgap);
+    }
+    for (int x = xa + 1; x < xb; x++, inter += gradient) {
+        if (dotted && (x - xa) % 3)
+            continue;
+        int iy = (int)floorf(inter);
+        float f = inter - iy;
+        put(x, iy, 1 - f);
+        put(x, iy + 1, f);
     }
 }
 
 } // namespace
 
+uint8_t familyFilterInverse(uint8_t v); // FamilyTheme.cpp
+
 /**
- * Draw the model at `ms` into a w x h RGB565 buffer (cleared here), `fade` 0 (nothing) to 16 (every
- * pixel). Returns the box of the pixels it drew, in buffer coordinates, through x0..y1 (x1 < x0 if nothing).
+ * Draw the model at `ms` into a w x h 8-bit grey buffer (cleared here) at `level` 0 (black) to 256
+ * (full white). Returns the box of the pixels it drew, in buffer coordinates, through x0..y1 (x1 < x0 if
+ * nothing).
  */
-void familyModelDraw(uint16_t *buf, int w, int h, uint32_t ms, int fade, int *x0, int *y0, int *x1, int *y1)
+void familyModelDraw(uint8_t *buf, int w, int h, uint32_t ms, int level, int *x0, int *y0, int *x1, int *y1)
 {
-    memset(buf, 0, (size_t)w * h * sizeof(uint16_t));
-    Target t{buf, w, h, fade, w, h, -1, -1};
+    memset(buf, 0, (size_t)w * h);
+    Target t{buf, w, h, level, w, h, -1, -1};
+    for (int v = 0; v < 256; v++) // the filter is bypassed in some phases, so this follows it each frame
+        panelGrey[v] = familyFilterInverse((uint8_t)v);
+    if (!coverage[64])
+        for (int q = 0; q <= 64; q++)
+            coverage[q] = (uint8_t)lroundf(255 * powf(q / 64.0f, 0.6f));
     if (!build()) {
         *x0 = *y0 = 0;
         *x1 = *y1 = -1;
@@ -261,8 +305,7 @@ void familyModelDraw(uint16_t *buf, int w, int h, uint32_t ms, int fade, int *x0
             continue;
         V3 a = rotate(v, e.a), b = rotate(v, e.b);
         float sa = scale * camera / (camera - a.z), sb = scale * camera / (camera - b.z);
-        line(t, (int)lroundf(cx + a.x * sa), (int)lroundf(cy - a.y * sa), (int)lroundf(cx + b.x * sb),
-             (int)lroundf(cy - b.y * sb), !seen);
+        line(t, cx + a.x * sa, cy - a.y * sa, cx + b.x * sb, cy - b.y * sb, !seen);
     }
     *x0 = t.x0;
     *y0 = t.y0;
