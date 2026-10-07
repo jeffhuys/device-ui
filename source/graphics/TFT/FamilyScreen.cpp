@@ -58,7 +58,7 @@ constexpr const char *c_markerFile = "/family_read.bin";      // last-read marke
 constexpr const char *c_welcomeFile = "/family_welcome.done"; // the welcome was finished; provision.py deletes it
 constexpr int c_welcomeSteps = 5;
 constexpr int32_t c_modelW = 112, c_modelH = 150; // the wireframe's canvas, at the right of page 1
-constexpr uint32_t c_modelPeriodMs = 25;          // up to 40 frames a second, while page 1 shows (a refresh takes ~9 ms)
+constexpr uint32_t c_modelPeriodMs = 16;          // up to 60 frames a second, while page 1 shows (a frame takes ~10 ms)
 constexpr uint32_t c_modelRefrMs = 15;            // the display's refresh timer meanwhile (LVGL's default: 40 ms)
 void familyFastBuffer(bool on);                   // FamilyBoot.cpp: the internal-RAM draw buffer
 static uint32_t modelRefreshes = 0, modelRefreshUs = 0, modelRefreshMaxUs = 0, modelDirtyPx = 0;
@@ -1456,8 +1456,9 @@ void FamilyScreen::timer_model(lv_timer_t *)
         modelSpeedUp(false);
         return;
     }
-    if (!f.booting) // the boot animation holds the fast buffer until its end
-        modelSpeedUp(true);
+    if (f.booting) // the model is under the boot animation's outro; and the boot holds the fast buffer until its end
+        return;
+    modelSpeedUp(true);
 #if defined(ARCH_ESP32)
     int64_t us0 = esp_timer_get_time();
 #endif
@@ -1479,6 +1480,9 @@ void FamilyScreen::timer_model(lv_timer_t *)
         modelDirtyPx += lv_area_get_size(&dirty);
         lv_area_move(&dirty, coords.x1, coords.y1);
         lv_obj_invalidate_area(f.welcomeModel, &dirty);
+        // draw it now: waiting for LVGL's refresh timer costs a pass of the UI task, which capped the model at
+        // 25 frames a second (the product call, 2026-10-07: smooth on the first page is worth the bus time)
+        lv_refr_now(lv_display_get_default());
     }
     f.modelFrames++;
     if (lv_tick_elaps(f.modelStatsTick) >= 10000) {
