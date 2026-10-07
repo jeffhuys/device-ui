@@ -281,8 +281,11 @@ void familyModelDraw(uint8_t *buf, int w, int h, uint32_t ms, int level, int *x0
         return;
     }
 
-    // one turn in 16 s, right to left as seen from the front (the user's choice; the first version turned the other way)
-    const float turn = -(float)(ms % 16000) / 16000.0f * 2 * (float)M_PI;
+    // one turn in 16 s, right to left as seen from the front (the user's choice; the first version turned the other way).
+    // It starts with the front turned 60 degrees to the right, so the first part of the turn brings the front towards
+    // the reader (face on at 2.7 s, as the fade ends) and keeps it in view for 6.7 s, not the back (the user's wish)
+    const float c_start = (float)M_PI / 3;
+    const float turn = c_start - (float)(ms % 16000) / 16000.0f * 2 * (float)M_PI;
     const float tilt = 0.32f + 0.05f * sinf(2 * turn);                   // about 18 degrees, two breaths a turn
     View v{cosf(turn), sinf(turn), cosf(tilt), sinf(tilt)};
 
