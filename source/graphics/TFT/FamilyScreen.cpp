@@ -108,7 +108,8 @@ static void modelSpeedUp(bool on)
     }
 }
 
-void familyModelDraw(uint16_t *buf, int w, int h, uint32_t ms, int *x0, int *y0, int *x1, int *y1); // FamilyModel.cpp
+constexpr uint32_t c_modelDelayMs = 800, c_modelFadeMs = 1500; // a moment of nothing, then it materialises
+void familyModelDraw(uint16_t *buf, int w, int h, uint32_t ms, int fade, int *x0, int *y0, int *x1, int *y1); // FamilyModel.cpp
 void familyModelFree(void);
 constexpr uint32_t c_markerMagic = 0x464d5231;           // "FMR1"
 constexpr uint32_t c_chordHoldMs = 1000;                 // trackball held before P counts
@@ -1406,9 +1407,12 @@ void FamilyScreen::startModel(void)
     lv_timer_resume(modelTimer);
     if (!modelRunning) {
         modelRunning = true;
-        modelStartTick = lv_tick_get();
+        modelStartTick = 0; // the clock starts at the first frame that can be seen (timer_model)
         modelFrames = modelDrawUs = 0;
-        modelStatsTick = modelStartTick;
+        // back on page 1: the pause and the fade again, so the last frame from before must not show meanwhile
+        memset(modelBuf, 0, (size_t)c_modelW * c_modelH * sizeof(uint16_t));
+        modelDirty = {0, 0, -1, -1};
+        lv_obj_invalidate(welcomeModel);
     }
 }
 
@@ -1459,11 +1463,21 @@ void FamilyScreen::timer_model(lv_timer_t *)
     if (f.booting) // the model is under the boot animation's outro; and the boot holds the fast buffer until its end
         return;
     modelSpeedUp(true);
+    if (!f.modelStartTick) {
+        f.modelStartTick = lv_tick_get() ? lv_tick_get() : 1;
+        f.modelStatsTick = f.modelStartTick;
+    }
+    // the text alone first, then the model fades in, already turning from its front view
+    uint32_t elapsed = lv_tick_elaps(f.modelStartTick);
+    if (elapsed < c_modelDelayMs)
+        return;
+    uint32_t shown = elapsed - c_modelDelayMs;
+    int fade = shown >= c_modelFadeMs ? 16 : 1 + (int)(shown * 16 / c_modelFadeMs);
 #if defined(ARCH_ESP32)
     int64_t us0 = esp_timer_get_time();
 #endif
     int x0, y0, x1, y1;
-    familyModelDraw(f.modelBuf, c_modelW, c_modelH, lv_tick_elaps(f.modelStartTick), &x0, &y0, &x1, &y1);
+    familyModelDraw(f.modelBuf, c_modelW, c_modelH, shown, fade, &x0, &y0, &x1, &y1);
 #if defined(ARCH_ESP32)
     f.modelDrawUs += (uint32_t)(esp_timer_get_time() - us0);
 #endif

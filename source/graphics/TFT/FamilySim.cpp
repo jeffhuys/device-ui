@@ -203,7 +203,8 @@ void FamilyScreen::simFrame(lv_display_t *disp, const lv_area_t *area, const uin
         return;
     char path[512];
     snprintf(path, sizeof(path), "%s/%s%04u_%05u.ppm", framesDir, model ? "m" : "f", (unsigned)frameNo++,
-             (unsigned)lv_tick_elaps(model ? family->modelStartTick : family->bootStartTick));
+             (unsigned)(model ? (family->modelStartTick ? lv_tick_elaps(family->modelStartTick) : 0)
+                              : lv_tick_elaps(family->bootStartTick)));
     if (FILE *f = fopen(path, "wb")) {
         fprintf(f, "P6\n320 240\n255\n");
         fwrite(frame, 1, sizeof(frame), f);

@@ -12,6 +12,10 @@
 // into an RGB565 buffer that LVGL shows as a canvas. Our own lines and not LVGL's: LVGL anti-aliases,
 // and the black and white panel filter would turn the grey edge pixels into a ragged line.
 //
+// Fading in: the panel is black and white, so there is no grey to fade through. An ordered dither
+// stands in for it: a pixel of the model shows only where a 4 x 4 Bayer threshold is below the fade
+// level, so the wireframe materialises out of scattered dots over 16 steps.
+//
 // Hidden lines: the body is convex, so a face is visible when it faces the camera. A body edge is
 // solid when one of its two faces is visible and dotted when neither is; the screen, keys and the
 // other details are drawn only while their face is visible.
@@ -167,16 +171,21 @@ V3 rotate(const View &v, const V3 &p)
     return {x1, y2, z2};
 }
 
-// the pixel buffer and the box of what this frame drew
+// the pixel buffer, the fade level (0..16) and the box of what this frame drew
 struct Target {
     uint16_t *buf;
     int w, h;
+    int fade;
     int x0, y0, x1, y1;
 };
+
+constexpr uint8_t c_bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
 
 void plot(Target &t, int x, int y)
 {
     if ((unsigned)x >= (unsigned)t.w || (unsigned)y >= (unsigned)t.h)
+        return;
+    if (c_bayer[y & 3][x & 3] >= t.fade)
         return;
     t.buf[y * t.w + x] = 0xffff;
     if (x < t.x0)
@@ -215,13 +224,13 @@ void line(Target &t, int x0, int y0, int x1, int y1, bool dotted)
 } // namespace
 
 /**
- * Draw the model at `ms` into a w x h RGB565 buffer (cleared here). Returns the box of the pixels it
- * drew, in buffer coordinates, through x0..y1 (x1 < x0 if nothing).
+ * Draw the model at `ms` into a w x h RGB565 buffer (cleared here), `fade` 0 (nothing) to 16 (every
+ * pixel). Returns the box of the pixels it drew, in buffer coordinates, through x0..y1 (x1 < x0 if nothing).
  */
-void familyModelDraw(uint16_t *buf, int w, int h, uint32_t ms, int *x0, int *y0, int *x1, int *y1)
+void familyModelDraw(uint16_t *buf, int w, int h, uint32_t ms, int fade, int *x0, int *y0, int *x1, int *y1)
 {
     memset(buf, 0, (size_t)w * h * sizeof(uint16_t));
-    Target t{buf, w, h, w, h, -1, -1};
+    Target t{buf, w, h, fade, w, h, -1, -1};
     if (!build()) {
         *x0 = *y0 = 0;
         *x1 = *y1 = -1;
