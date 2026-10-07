@@ -109,6 +109,7 @@ static void modelSpeedUp(bool on)
 }
 
 void familyModelDraw(uint16_t *buf, int w, int h, uint32_t ms, int *x0, int *y0, int *x1, int *y1); // FamilyModel.cpp
+void familyModelFree(void);
 constexpr uint32_t c_markerMagic = 0x464d5231;           // "FMR1"
 constexpr uint32_t c_chordHoldMs = 1000;                 // trackball held before P counts
 #ifndef FAMILY_DEV_IDLE_MS
@@ -1442,6 +1443,7 @@ void FamilyScreen::freeModel(void)
 #endif
         modelBuf = nullptr;
     }
+    familyModelFree();
 }
 
 void FamilyScreen::timer_model(lv_timer_t *)

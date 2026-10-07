@@ -18,6 +18,7 @@
 
 #include "lvgl.h"
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 namespace {
@@ -41,8 +42,10 @@ struct Edge {
     Kind kind;
 };
 
+// built when the model first turns and freed with it (familyModelFree): a fixed array would hold
+// about 9 KB of internal RAM for good, also on devices that finished their welcome long ago
 constexpr int c_maxEdges = 320;
-Edge edges[c_maxEdges];
+Edge *edges = nullptr;
 int edgeCount = 0;
 V3 faceNormal[c_faces], faceCentre[c_faces];
 
@@ -60,7 +63,7 @@ float Y(float sy)
 
 void add(V3 a, V3 b, uint16_t faces, Kind kind)
 {
-    if (edgeCount < c_maxEdges)
+    if (edges && edgeCount < c_maxEdges)
         edges[edgeCount++] = {a, b, faces, kind};
 }
 
@@ -82,10 +85,14 @@ void octagon(float cx, float cy, float r, float z)
     }
 }
 
-void build(void)
+bool build(void)
 {
-    if (edgeCount)
-        return;
+    if (edges)
+        return true;
+    edges = (Edge *)malloc(sizeof(Edge) * c_maxEdges);
+    if (!edges)
+        return false;
+    edgeCount = 0;
     // the outline, clockwise from the top left, with 45 degree cuts at the corners
     const float w = c_halfW, h = c_halfH, c = c_cut, d = c_halfD;
     const V3 outline[8] = {{-w + c, h, 0}, {w - c, h, 0}, {w, h - c, 0}, {w, -h + c, 0},
@@ -144,6 +151,7 @@ void build(void)
     sideRect({w, Y(54), 2}, {w, Y(54), -2}, {w, Y(62), -2}, {w, Y(62), 2}, right);
     sideRect({-w, Y(44), 1.5f}, {-w, Y(44), -1.5f}, {-w, Y(49), -1.5f}, {-w, Y(49), 1.5f}, left);
     sideRect({X(34.5f), -h, 1.6f}, {X(45.5f), -h, 1.6f}, {X(45.5f), -h, -1.6f}, {X(34.5f), -h, -1.6f}, bottom);
+    return true;
 }
 
 struct View {
@@ -212,9 +220,13 @@ void line(Target &t, int x0, int y0, int x1, int y1, bool dotted)
  */
 void familyModelDraw(uint16_t *buf, int w, int h, uint32_t ms, int *x0, int *y0, int *x1, int *y1)
 {
-    build();
     memset(buf, 0, (size_t)w * h * sizeof(uint16_t));
     Target t{buf, w, h, w, h, -1, -1};
+    if (!build()) {
+        *x0 = *y0 = 0;
+        *x1 = *y1 = -1;
+        return;
+    }
 
     // one turn in 16 s, right to left as seen from the front (the user's choice; the first version turned the other way)
     const float turn = -(float)(ms % 16000) / 16000.0f * 2 * (float)M_PI;
@@ -247,6 +259,14 @@ void familyModelDraw(uint16_t *buf, int w, int h, uint32_t ms, int *x0, int *y0,
     *y0 = t.y0;
     *x1 = t.x1;
     *y1 = t.y1;
+}
+
+// give the edge table back; the next familyModelDraw() builds it again
+void familyModelFree(void)
+{
+    free(edges);
+    edges = nullptr;
+    edgeCount = 0;
 }
 
 #endif
