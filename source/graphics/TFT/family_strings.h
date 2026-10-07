@@ -28,6 +28,27 @@
 #define FAMILY_STR_DAYS_AGO "%u DAGEN GELEDEN"
 
 // send (family_font_16 bar, family_font_20 text, family_font_14 key hints)
+// first-start welcome (FamilyScreen.cpp, "welcome")
+#define FAMILY_STR_WELCOME_POSITION "%d / %d"
+#define FAMILY_STR_WELCOME_NEXT "VERDER"
+#define FAMILY_STR_WELCOME_SKIP "OVERSLAAN"
+#define FAMILY_STR_WELCOME_HELLO "ZEG HALLO"
+#define FAMILY_STR_WELCOME_T1 "WELKOM"
+#define FAMILY_STR_WELCOME_B1 "Dit is jouw VOXLnet. Het heet:"
+#define FAMILY_STR_WELCOME_A1 "Zo zien de anderen jouw berichten."
+#define FAMILY_STR_WELCOME_T2 "LEZEN"
+#define FAMILY_STR_WELCOME_B2 "Op het beginscherm zie je of er nieuwe berichten zijn. Tik op LEZEN, veeg om te bladeren, en tik op TERUG om terug te gaan."
+#define FAMILY_STR_WELCOME_T3 "STUREN"
+#define FAMILY_STR_WELCOME_B3 "Tik op BERICHT STUREN, typ je bericht en tik op VERSTUREN. Het gaat naar de hele familie."
+#define FAMILY_STR_WELCOME_T4 "SLAPEN"
+#define FAMILY_STR_WELCOME_B4_MIN "Na %u %s gaat het scherm uit. Druk op de trackbal, het balletje onder het scherm, om het weer aan te zetten. Een nieuw bericht zet het vanzelf aan."
+#define FAMILY_STR_WELCOME_B4 "Gaat het scherm uit, druk dan op de trackbal, het balletje onder het scherm. Een nieuw bericht zet het vanzelf aan."
+#define FAMILY_STR_MINUTE "minuut"
+#define FAMILY_STR_MINUTES "minuten"
+#define FAMILY_STR_WELCOME_T5 "ZEG HALLO"
+#define FAMILY_STR_WELCOME_B5 "Dit gaat naar de hele familie:" // one line: the card below needs the room
+#define FAMILY_STR_WELCOME_MESSAGE "Hallo vanaf %s! Aangesloten op VOXLnet."
+#define FAMILY_STR_WELCOME_REPLAY "VOXL welcome tour"
 #define FAMILY_STR_SEND_TITLE "AAN IEDEREEN" // after TERUG; the home row already says BERICHT STUREN
 #define FAMILY_STR_KEY_SEND "ENTER"
 #define FAMILY_STR_HINT_SEND "VERSTUREN"

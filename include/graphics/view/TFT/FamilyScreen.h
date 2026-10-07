@@ -47,7 +47,7 @@ class FamilyScreen
     static void packetReceived(const meshtastic_MeshPacket &p);
 
   private:
-    enum Page { eHome, eRead, eSend };
+    enum Page { eHome, eRead, eSend, eWelcome };
 
     struct Entry {
         uint32_t from;
@@ -113,6 +113,17 @@ class FamilyScreen
     void resumeStormPins(void);
     const char *senderName(uint32_t nodeNum, char *buf, size_t len);
     void formatTime(const Entry &e, char *buf, size_t len);
+    void sendText(const char *text);
+
+    // first-start welcome: five pages, then the home screen; done once, marked in littlefs
+    void buildWelcome(void);
+    void startWelcome(void);
+    void showWelcomeStep(int step);
+    void finishWelcome(bool sayHello);
+    void loadWelcome(void);
+    void addWelcomeReplayButton(void);
+    static void ui_event_welcome(lv_event_t *e);
+    static void ui_event_welcome_replay(lv_event_t *e);
 
     // theme (FamilyTheme.cpp): the VOXL black and white over all of MUI
     void installTheme(void);
@@ -182,6 +193,18 @@ class FamilyScreen
     lv_obj_t *textArea = nullptr;
     lv_obj_t *sendBox = nullptr;
     lv_obj_t *sendCount = nullptr;
+    lv_obj_t *welcomePage = nullptr;
+    lv_obj_t *welcomeCount = nullptr;
+    lv_obj_t *welcomeTitle = nullptr;
+    lv_obj_t *welcomeBody = nullptr;
+    lv_obj_t *welcomeName = nullptr;      // a white block with the device's name (step 1)
+    lv_obj_t *welcomeNameLabel = nullptr;
+    lv_obj_t *welcomeCard = nullptr;      // the hello message as a card (step 5)
+    lv_obj_t *welcomeCardLabel = nullptr;
+    lv_obj_t *welcomeAfter = nullptr;     // a line under the name block (step 1)
+    lv_obj_t *welcomeSkip = nullptr;
+    lv_obj_t *welcomeNext = nullptr;
+    lv_obj_t *welcomeNextLabel = nullptr;
     lv_obj_t *bootObj = nullptr;      // the boot animation, above everything on the main screen
     lv_timer_t *bootTimer = nullptr;
     lv_group_t *bootGroup = nullptr;  // empty: keys during the boot animation go nowhere
@@ -192,6 +215,8 @@ class FamilyScreen
     bool mainScreenActive = false; // main screen (and so the overlay) is the loaded screen
     bool restored = false;         // /messages log has been read back
     bool booting = false;          // the boot animation is up
+    bool welcomeDone = true;       // the welcome was finished (or skipped) on this device
+    int welcomeStep = 0;
     uint32_t bootStartTick = 0;    // lv_tick at its start
     uint32_t bootEndTick = 0;      // lv_tick at its end, 0 while it runs
     uint32_t alertHideAt = 0;      // millis() to clear a transient alert, 0 = keep

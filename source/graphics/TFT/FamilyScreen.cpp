@@ -14,6 +14,7 @@
 #include "family_strings.h"
 #include "lv_i18n.h"
 #include "lvgl_private.h"
+#include "styles.h"
 #include "ui.h"
 #include "util/ILog.h"
 #include <algorithm>
@@ -51,7 +52,9 @@ LV_IMAGE_DECLARE(family_wordmark_16);
         .blue = (C >> 0) & 0xff, .green = (C >> 8) & 0xff, .red = (C >> 16) & 0xff                                               \
     }
 
-constexpr const char *c_markerFile = "/family_read.bin"; // last-read marker, next to /messages
+constexpr const char *c_markerFile = "/family_read.bin";      // last-read marker, next to /messages
+constexpr const char *c_welcomeFile = "/family_welcome.done"; // the welcome was finished; provision.py deletes it
+constexpr int c_welcomeSteps = 5;
 constexpr uint32_t c_markerMagic = 0x464d5231;           // "FMR1"
 constexpr uint32_t c_chordHoldMs = 1000;                 // trackball held before P counts
 #ifndef FAMILY_DEV_IDLE_MS
@@ -116,7 +119,9 @@ void FamilyScreen::attach(TFTView_320x240 *view)
         return;
     family = new FamilyScreen(view);
     family->loadMarker();
+    family->loadWelcome();
     family->build();
+    family->addWelcomeReplayButton();
     family->installTheme();
     family->hookInput();
     family->mainScreenActive = lv_screen_active() == objects.main_screen;
@@ -570,6 +575,7 @@ void FamilyScreen::build(void)
     buildHome();
     buildRead();
     buildSend();
+    buildWelcome();
 }
 
 void FamilyScreen::buildHome(void)
@@ -725,7 +731,12 @@ void FamilyScreen::show(void)
     shown = true;
     lv_obj_clear_flag(root, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(root);
-    goHome();
+    if (!welcomeDone) { // first start, or replayed from dev mode: the welcome, where it was left
+        showPage(eWelcome);
+        showWelcomeStep(welcomeStep);
+    } else {
+        goHome();
+    }
     refreshStrip();
     assignGroup();
 }
@@ -741,8 +752,8 @@ void FamilyScreen::hide(void)
 void FamilyScreen::showPage(Page p)
 {
     page = p;
-    lv_obj_t *pages[3] = {homePage, readPage, sendPage};
-    for (int i = 0; i < 3; i++) {
+    lv_obj_t *pages[4] = {homePage, readPage, sendPage, welcomePage};
+    for (int i = 0; i < 4; i++) {
         if (i == p)
             lv_obj_clear_flag(pages[i], LV_OBJ_FLAG_HIDDEN);
         else
@@ -829,6 +840,10 @@ void FamilyScreen::rebuildGroup(lv_obj_t *focus)
         break;
     case eSend:
         lv_group_add_obj(group, sendBox);
+        break;
+    case eWelcome:
+        lv_group_add_obj(group, welcomeSkip);
+        lv_group_add_obj(group, welcomeNext);
         break;
     }
     if (focus && lv_obj_get_group(focus) == group)
@@ -1076,6 +1091,13 @@ void FamilyScreen::send(void)
     const char *text = lv_textarea_get_text(textArea);
     if (!text || !*text)
         return;
+    sendText(text);
+    lv_textarea_set_text(textArea, "");
+    openRead(false);
+}
+
+void FamilyScreen::sendText(const char *text)
+{
     char buf[c_maxSendBytes + 1];
     snprintf(buf, sizeof(buf), "%s", text);
 
@@ -1089,9 +1111,274 @@ void FamilyScreen::send(void)
     view->activeMsgContainer = container;
     view->handleAddMessage(buf); // ends in sentMessage()
     view->activeMsgContainer = saved;
+}
 
-    lv_textarea_set_text(textArea, "");
-    openRead(false);
+// ===== welcome =====
+//
+// The devices go to the family boxed, as a product. The first start shows five pages before the
+// home screen: the device's name as the others see it above its messages, reading, sending, sleep
+// and waking, and an offer to say hello to everyone. VERDER (or a swipe to the left) goes on,
+// Backspace or a swipe to the right goes back; OVERSLAAN jumps to the hello page, and there finishes
+// without sending. Finishing writes c_welcomeFile; scripts/provision.py deletes it, so a device
+// prepared for its box starts with the welcome, and MUI's settings list gets a button to replay it.
+
+void FamilyScreen::loadWelcome(void)
+{
+    welcomeDone = persistentFS.exists(c_welcomeFile);
+    welcomeStep = 0;
+    ILOG_INFO("family: welcome %s", welcomeDone ? "done before" : "to show");
+}
+
+void FamilyScreen::buildWelcome(void)
+{
+    welcomePage = createPage(root);
+    lv_obj_add_flag(welcomePage, LV_OBJ_FLAG_CLICKABLE); // a swipe anywhere turns the page
+    // LVGL hands a gesture up to the outermost object that still bubbles it (the screen); stop it here
+    lv_obj_clear_flag(welcomePage, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_add_event_cb(welcomePage, ui_event_welcome, LV_EVENT_GESTURE, (void *)(intptr_t)2);
+
+    lv_obj_t *strip = createPlain(welcomePage);
+    lv_obj_set_size(strip, lv_pct(100), c_barHeight);
+    lv_obj_t *mark = lv_image_create(strip);
+    lv_image_set_src(mark, &family_wordmark_16);
+    lv_obj_set_align(mark, LV_ALIGN_LEFT_MID);
+    welcomeCount = createLabel(strip, &family_font_14, "");
+    lv_obj_set_align(welcomeCount, LV_ALIGN_RIGHT_MID);
+
+    lv_obj_t *content = createPlain(welcomePage);
+    lv_obj_set_width(content, lv_pct(100));
+    lv_obj_set_flex_grow(content, 1);
+    lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(content, 6, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_hor(content, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    welcomeTitle = createLabel(content, &family_font_28, "");
+    welcomeBody = createLabel(content, &family_font_16, "");
+    lv_obj_set_width(welcomeBody, lv_pct(100));
+    lv_label_set_long_mode(welcomeBody, LV_LABEL_LONG_WRAP);
+
+    // the name, as a solid white block like the unread badge
+    welcomeName = createPlain(content);
+    lv_obj_set_size(welcomeName, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(welcomeName, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(welcomeName, colorWhite, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(welcomeName, colorBlack, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_hor(welcomeName, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+    welcomeNameLabel = createLabel(welcomeName, &family_font_28, "");
+    welcomeAfter = createLabel(content, &family_font_16, FAMILY_STR_WELCOME_A1);
+    lv_obj_set_width(welcomeAfter, lv_pct(100));
+    lv_label_set_long_mode(welcomeAfter, LV_LABEL_LONG_WRAP);
+
+    // the hello message, as it will look in Lezen
+    welcomeCard = createCard(content, true, "");
+    lv_obj_clear_flag(welcomeCard, lv_obj_flag_t(LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLL_ON_FOCUS));
+    lv_label_set_text(lv_obj_get_child(lv_obj_get_child(welcomeCard, 0), 0), FAMILY_STR_ME);
+    welcomeCardLabel = lv_obj_get_child(welcomeCard, 1);
+
+    // OVERSLAAN left, VERDER right
+    lv_obj_t *buttons = createPlain(welcomePage);
+    lv_obj_set_size(buttons, lv_pct(100), c_pageBarHeight);
+    welcomeSkip = createPlain(buttons);
+    lv_obj_set_size(welcomeSkip, LV_SIZE_CONTENT, lv_pct(100));
+    lv_obj_set_align(welcomeSkip, LV_ALIGN_LEFT_MID);
+    lv_obj_set_style_pad_hor(welcomeSkip, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(welcomeSkip, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(welcomeSkip, colorBlack, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_add_style(welcomeSkip, &styleBlockFocused, LV_PART_MAIN | LV_STATE_FOCUSED);
+    lv_obj_add_style(welcomeSkip, &styleBlockFocused, LV_PART_MAIN | LV_STATE_PRESSED);
+    lv_obj_add_flag(welcomeSkip, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(welcomeSkip, ui_event_welcome, LV_EVENT_ALL, (void *)(intptr_t)0);
+    lv_obj_t *skip = createLabel(welcomeSkip, &family_font_14, FAMILY_STR_WELCOME_SKIP);
+    lv_obj_set_align(skip, LV_ALIGN_CENTER);
+
+    welcomeNext = createPlain(buttons);
+    lv_obj_set_size(welcomeNext, LV_SIZE_CONTENT, lv_pct(100));
+    lv_obj_set_align(welcomeNext, LV_ALIGN_RIGHT_MID);
+    lv_obj_add_style(welcomeNext, &styleBlock, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_add_style(welcomeNext, &styleBlockFocused, LV_PART_MAIN | LV_STATE_FOCUSED);
+    lv_obj_add_style(welcomeNext, &styleBlockFocused, LV_PART_MAIN | LV_STATE_PRESSED);
+    lv_obj_set_style_pad_right(welcomeNext, 18, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_add_flag(welcomeNext, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(welcomeNext, ui_event_welcome, LV_EVENT_ALL, (void *)(intptr_t)1);
+    chamfer(welcomeNext);
+    welcomeNextLabel = createLabel(welcomeNext, &family_font_20, FAMILY_STR_WELCOME_NEXT);
+    lv_obj_set_align(welcomeNextLabel, LV_ALIGN_LEFT_MID);
+}
+
+void FamilyScreen::startWelcome(void)
+{
+    welcomeDone = false;
+    welcomeStep = 0;
+    if (shown) {
+        showPage(eWelcome);
+        showWelcomeStep(0);
+    }
+}
+
+void FamilyScreen::showWelcomeStep(int step)
+{
+    if (step < 0)
+        step = 0;
+    if (step >= c_welcomeSteps)
+        step = c_welcomeSteps - 1;
+    welcomeStep = step;
+    lv_label_set_text_fmt(welcomeCount, FAMILY_STR_WELCOME_POSITION, step + 1, c_welcomeSteps);
+
+    static const char *titles[c_welcomeSteps] = {FAMILY_STR_WELCOME_T1, FAMILY_STR_WELCOME_T2, FAMILY_STR_WELCOME_T3,
+                                                 FAMILY_STR_WELCOME_T4, FAMILY_STR_WELCOME_T5};
+    lv_label_set_text(welcomeTitle, titles[step]);
+
+    char name[48];
+    senderName(view->ownNode, name, sizeof(name));
+    char body[220];
+    switch (step) {
+    case 0:
+        snprintf(body, sizeof(body), "%s", FAMILY_STR_WELCOME_B1);
+        break;
+    case 1:
+        snprintf(body, sizeof(body), "%s", FAMILY_STR_WELCOME_B2);
+        break;
+    case 2:
+        snprintf(body, sizeof(body), "%s", FAMILY_STR_WELCOME_B3);
+        break;
+    case 3: {
+        // the screen timeout as MUI has it (provision/family.yaml sets 120 s)
+        uint32_t secs = view->db.uiConfig.screen_timeout;
+        uint32_t minutes = (secs + 30) / 60;
+        if (secs >= 60)
+            snprintf(body, sizeof(body), FAMILY_STR_WELCOME_B4_MIN, (unsigned)minutes,
+                     minutes == 1 ? FAMILY_STR_MINUTE : FAMILY_STR_MINUTES);
+        else
+            snprintf(body, sizeof(body), "%s", FAMILY_STR_WELCOME_B4);
+        break;
+    }
+    default:
+        snprintf(body, sizeof(body), "%s", FAMILY_STR_WELCOME_B5);
+        break;
+    }
+    lv_label_set_text(welcomeBody, body);
+
+    if (step == 0) {
+        char upperName[48];
+        snprintf(upperName, sizeof(upperName), "%s", name);
+        upper(upperName);
+        lv_label_set_text(welcomeNameLabel, upperName);
+        lv_obj_clear_flag(welcomeName, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(welcomeAfter, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(welcomeName, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(welcomeAfter, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (step == c_welcomeSteps - 1) {
+        char hello[c_maxSendBytes + 1];
+        snprintf(hello, sizeof(hello), FAMILY_STR_WELCOME_MESSAGE, name);
+        lv_label_set_text(welcomeCardLabel, hello);
+        lv_obj_clear_flag(welcomeCard, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(welcomeNextLabel, FAMILY_STR_WELCOME_HELLO);
+    } else {
+        lv_obj_add_flag(welcomeCard, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(welcomeNextLabel, FAMILY_STR_WELCOME_NEXT);
+    }
+    rebuildGroup(welcomeNext);
+}
+
+void FamilyScreen::finishWelcome(bool sayHello)
+{
+    welcomeDone = true;
+    File file = persistentFS.open(c_welcomeFile, FILE_WRITE);
+    if (file) {
+        file.write((const uint8_t *)"1", 1);
+        file.close();
+    } else {
+        ILOG_ERROR("family: cannot write %s", c_welcomeFile);
+    }
+    ILOG_INFO("family: welcome finished%s", sayHello ? ", saying hello" : "");
+    if (sayHello) {
+        char name[48];
+        senderName(view->ownNode, name, sizeof(name));
+        char hello[c_maxSendBytes + 1];
+        snprintf(hello, sizeof(hello), FAMILY_STR_WELCOME_MESSAGE, name);
+        sendText(hello);
+        openRead(false);
+    } else {
+        goHome();
+    }
+}
+
+void FamilyScreen::ui_event_welcome(lv_event_t *e)
+{
+    if (!family || family->page != eWelcome)
+        return;
+    FamilyScreen &f = *family;
+    lv_event_code_t code = lv_event_get_code(e);
+    intptr_t which = (intptr_t)lv_event_get_user_data(e);
+    bool last = f.welcomeStep == c_welcomeSteps - 1;
+    if (code == LV_EVENT_GESTURE) {
+        lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_active());
+        if (dir == LV_DIR_LEFT && !last)
+            f.showWelcomeStep(f.welcomeStep + 1);
+        else if (dir == LV_DIR_RIGHT)
+            f.showWelcomeStep(f.welcomeStep - 1);
+        return;
+    }
+    if (code == LV_EVENT_KEY) {
+        uint32_t key = lv_event_get_key(e);
+        if (key == LV_KEY_BACKSPACE || key == LV_KEY_ESC)
+            f.showWelcomeStep(f.welcomeStep - 1);
+        return;
+    }
+    if (code != LV_EVENT_CLICKED)
+        return;
+    if (which == 1) { // VERDER, and on the last page ZEG HALLO
+        if (last)
+            f.finishWelcome(true);
+        else
+            f.showWelcomeStep(f.welcomeStep + 1);
+    } else { // OVERSLAAN: to the hello page, and from there out without a message
+        if (last)
+            f.finishWelcome(false);
+        else
+            f.showWelcomeStep(c_welcomeSteps - 1);
+    }
+}
+
+/**
+ * A button at the end of MUI's settings list (dev mode) that plays the welcome again, e.g. to show
+ * someone how the device works. Made here at runtime; the generated screens stay untouched.
+ */
+void FamilyScreen::addWelcomeReplayButton(void)
+{
+    if (!objects.basic_settings_reboot_button)
+        return;
+    lv_obj_t *parent = lv_obj_get_parent(objects.basic_settings_reboot_button);
+    lv_obj_t *button = lv_button_create(parent); // joins MUI's default group, like its neighbours
+    lv_obj_set_size(button, lv_pct(95), 30);
+    add_style_settings_button_style(button);
+    lv_obj_set_style_align(button, LV_ALIGN_TOP_MID, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_shadow_width(button, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_add_event_cb(button, ui_event_welcome_replay, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *label = lv_label_create(button);
+    lv_label_set_text(label, FAMILY_STR_WELCOME_REPLAY);
+    lv_obj_set_align(label, LV_ALIGN_CENTER);
+}
+
+void FamilyScreen::ui_event_welcome_replay(lv_event_t *)
+{
+    if (!family)
+        return;
+    ILOG_INFO("family: welcome replayed from dev mode");
+    lv_async_call(
+        [](void *) {
+            if (!family)
+                return;
+            family->welcomeDone = false;
+            family->welcomeStep = 0;
+            if (family->devMode)
+                family->leaveDevMode(); // shows the family screen, and with it the welcome
+            else if (family->shown)
+                family->startWelcome();
+        },
+        nullptr);
 }
 
 // ===== readiness gate and dev mode =====

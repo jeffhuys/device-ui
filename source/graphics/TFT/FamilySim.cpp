@@ -13,6 +13,8 @@
 //   touch <x> <y>        a finger tap at screen pixel x, y, through a pointer input of its own (as the
 //                        T-Deck's touch screen: LVGL's press, release and click, and the indev type)
 //   swipe <x> <y> <dy>   press at x, y, move dy pixels (negative: up) in steps, release: a scroll
+//   swipex <x> <y> <dx>  the same sideways (negative: to the left)
+//   welcome              play the first-start welcome again
 // Set FAMILY_SIM_FRAMES to a directory to record the boot animation: every refresh from its start
 // until 600 ms after its end is written there as a PPM, named by frame number and milliseconds.
 
@@ -119,6 +121,16 @@ void FamilyScreen::simCommand(const char *line)
             for (int i = 0; i < 3; i++)
                 touchPush(x, y, true);
             touchPush(x, y, false);
+        }
+    } else if (strcmp(line, "welcome") == 0) {
+        startWelcome();
+    } else if (strncmp(line, "swipex ", 7) == 0) {
+        int x = 0, y = 0, dx = 0;
+        if (sscanf(line + 7, "%d %d %d", &x, &y, &dx) == 3) {
+            touchPush(x, y, true);
+            for (int i = 1; i <= 10; i++)
+                touchPush(x + dx * i / 10, y, true);
+            touchPush(x + dx, y, false);
         }
     } else if (strncmp(line, "swipe ", 6) == 0) {
         int x = 0, y = 0, dy = 0;
