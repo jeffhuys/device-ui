@@ -388,7 +388,7 @@ uint32_t savedStrideAuto = 0;
 void useFastBuffer(lv_display_t *disp)
 {
 #if defined(ARCH_ESP32)
-    if (disp->render_mode != LV_DISPLAY_RENDER_MODE_PARTIAL)
+    if (fastBufMem || disp->render_mode != LV_DISPLAY_RENDER_MODE_PARTIAL) // already lent, or not ours to change
         return;
     const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
     const size_t keepFree = 64 * 1024; // for the firmware, while it starts up
@@ -647,6 +647,21 @@ void mergeDirty(void)
 }
 
 } // namespace
+
+/**
+ * The same fast draw buffer for the welcome's turning model (FamilyScreen.cpp): lend it, or give the
+ * display its own buffer back. A no-op while it is lent already, e.g. still to the boot animation.
+ */
+void familyFastBuffer(bool on)
+{
+    lv_display_t *disp = lv_display_get_default();
+    if (!disp)
+        return;
+    if (on)
+        useFastBuffer(disp);
+    else
+        restoreBuffer(disp);
+}
 
 // ===== FamilyScreen =====
 

@@ -58,7 +58,55 @@ constexpr const char *c_markerFile = "/family_read.bin";      // last-read marke
 constexpr const char *c_welcomeFile = "/family_welcome.done"; // the welcome was finished; provision.py deletes it
 constexpr int c_welcomeSteps = 5;
 constexpr int32_t c_modelW = 112, c_modelH = 150; // the wireframe's canvas, at the right of page 1
-constexpr uint32_t c_modelPeriodMs = 50;          // 20 frames a second, while page 1 shows
+constexpr uint32_t c_modelPeriodMs = 33;          // 30 frames a second, while page 1 shows
+constexpr uint32_t c_modelRefrMs = 15;            // the display's refresh timer meanwhile (LVGL's default: 40 ms)
+void familyFastBuffer(bool on);                   // FamilyBoot.cpp: the internal-RAM draw buffer
+static uint32_t modelRefreshes = 0, modelRefreshUs = 0, modelRefreshMaxUs = 0, modelDirtyPx = 0;
+static int64_t modelRefreshStart = 0;
+static uint32_t modelSavedRefrMs = 0;
+static bool modelFast = false; // the fast buffer and the quicker refresh are taken (after the boot animation)
+
+// display events while the model turns: how often the screen is refreshed, and how long that takes
+static void ui_event_model_display(lv_event_t *e)
+{
+#if defined(ARCH_ESP32)
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_REFR_START) {
+        modelRefreshStart = esp_timer_get_time();
+    } else if (code == LV_EVENT_REFR_READY && modelRefreshStart) {
+        uint32_t us = (uint32_t)(esp_timer_get_time() - modelRefreshStart);
+        modelRefreshStart = 0;
+        modelRefreshes++;
+        modelRefreshUs += us;
+        if (us > modelRefreshMaxUs)
+            modelRefreshMaxUs = us;
+    }
+#else
+    (void)e;
+#endif
+}
+
+// While the model turns, LVGL refreshes more often and renders into internal RAM, as for the boot animation
+static void modelSpeedUp(bool on)
+{
+    lv_display_t *disp = lv_display_get_default();
+    lv_timer_t *refr = disp ? lv_display_get_refr_timer(disp) : nullptr;
+    if (on && !modelFast) {
+        modelFast = true;
+        familyFastBuffer(true);
+        if (refr) {
+            modelSavedRefrMs = refr->period;
+            lv_timer_set_period(refr, c_modelRefrMs);
+        }
+        lv_display_add_event_cb(disp, ui_event_model_display, LV_EVENT_ALL, nullptr);
+    } else if (!on && modelFast) {
+        modelFast = false;
+        familyFastBuffer(false);
+        if (refr)
+            lv_timer_set_period(refr, modelSavedRefrMs ? modelSavedRefrMs : LV_DEF_REFR_PERIOD);
+        lv_display_remove_event_cb_with_user_data(disp, ui_event_model_display, nullptr);
+    }
+}
 
 void familyModelDraw(uint16_t *buf, int w, int h, uint32_t ms, int *x0, int *y0, int *x1, int *y1); // FamilyModel.cpp
 constexpr uint32_t c_markerMagic = 0x464d5231;           // "FMR1"
@@ -1184,13 +1232,6 @@ void FamilyScreen::buildWelcome(void)
     lv_label_set_text(lv_obj_get_child(lv_obj_get_child(welcomeCard, 0), 0), FAMILY_STR_ME);
     welcomeCardLabel = lv_obj_get_child(welcomeCard, 1);
 
-    // the wireframe: outside the column's flow, top right under the strip; its buffer comes with page 1
-    welcomeModel = lv_canvas_create(welcomePage);
-    lv_obj_add_flag(welcomeModel, lv_obj_flag_t(LV_OBJ_FLAG_FLOATING | LV_OBJ_FLAG_HIDDEN));
-    lv_obj_clear_flag(welcomeModel, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_size(welcomeModel, c_modelW, c_modelH);
-    lv_obj_align(welcomeModel, LV_ALIGN_TOP_RIGHT, 0, c_barHeight + c_gap);
-
     // OVERSLAAN left, VERDER right
     lv_obj_t *buttons = createPlain(welcomePage);
     lv_obj_set_size(buttons, lv_pct(100), c_pageBarHeight);
@@ -1347,7 +1388,15 @@ void FamilyScreen::startModel(void)
             return;
         }
         memset(modelBuf, 0, size);
+    }
+    if (!welcomeModel) {
+        // the canvas comes and goes with its buffer: LVGL asserts (and halts) on a canvas without one
+        welcomeModel = lv_canvas_create(welcomePage);
+        lv_obj_add_flag(welcomeModel, LV_OBJ_FLAG_FLOATING); // outside the column's flow, top right under the strip
+        lv_obj_clear_flag(welcomeModel, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_align(welcomeModel, LV_ALIGN_TOP_RIGHT, 0, c_barHeight + c_gap);
         lv_canvas_set_buffer(welcomeModel, modelBuf, c_modelW, c_modelH, LV_COLOR_FORMAT_RGB565);
+        modelDirty = {0, 0, -1, -1};
     }
     lv_obj_set_width(welcomeContent, lv_display_get_horizontal_resolution(nullptr) - 2 * c_gap - c_modelW - 4);
     lv_obj_clear_flag(welcomeModel, LV_OBJ_FLAG_HIDDEN);
@@ -1364,6 +1413,7 @@ void FamilyScreen::startModel(void)
 
 void FamilyScreen::stopModel(void)
 {
+    modelSpeedUp(false);
     if (modelTimer)
         lv_timer_pause(modelTimer);
     modelRunning = false;
@@ -1380,8 +1430,11 @@ void FamilyScreen::freeModel(void)
         lv_timer_delete(modelTimer);
         modelTimer = nullptr;
     }
+    if (welcomeModel) { // the widget first, so nothing draws from the buffer once it is freed
+        lv_obj_delete(welcomeModel);
+        welcomeModel = nullptr;
+    }
     if (modelBuf) {
-        lv_canvas_set_buffer(welcomeModel, nullptr, 0, 0, LV_COLOR_FORMAT_RGB565);
 #if defined(ARCH_ESP32)
         heap_caps_free(modelBuf);
 #else
@@ -1393,12 +1446,16 @@ void FamilyScreen::freeModel(void)
 
 void FamilyScreen::timer_model(lv_timer_t *)
 {
-    if (!family || !family->modelBuf)
+    if (!family || !family->modelBuf || !family->welcomeModel)
         return;
     FamilyScreen &f = *family;
     // only while it can be seen: the welcome's first page, on the loaded screen, not dimmed away
-    if (!f.shown || f.page != eWelcome || f.welcomeStep != 0 || !f.mainScreenActive || f.screenSaverActive())
+    if (!f.shown || f.page != eWelcome || f.welcomeStep != 0 || !f.mainScreenActive || f.screenSaverActive()) {
+        modelSpeedUp(false);
         return;
+    }
+    if (!f.booting) // the boot animation holds the fast buffer until its end
+        modelSpeedUp(true);
 #if defined(ARCH_ESP32)
     int64_t us0 = esp_timer_get_time();
 #endif
@@ -1417,14 +1474,20 @@ void FamilyScreen::timer_model(lv_timer_t *)
     if (dirty.x2 >= dirty.x1) {
         lv_area_t coords;
         lv_obj_get_coords(f.welcomeModel, &coords);
+        modelDirtyPx += lv_area_get_size(&dirty);
         lv_area_move(&dirty, coords.x1, coords.y1);
         lv_obj_invalidate_area(f.welcomeModel, &dirty);
     }
     f.modelFrames++;
     if (lv_tick_elaps(f.modelStatsTick) >= 10000) {
-        ILOG_INFO("family: welcome model, %u frames in %u ms, drawing %u us a frame", (unsigned)f.modelFrames,
-                  (unsigned)lv_tick_elaps(f.modelStatsTick), (unsigned)(f.modelFrames ? f.modelDrawUs / f.modelFrames : 0));
+        uint32_t n = f.modelFrames ? f.modelFrames : 1, r = modelRefreshes ? modelRefreshes : 1;
+        ILOG_INFO("family: welcome model, %u frames in %u ms, drawing %u us, %u px a frame; %u refreshes, %u us each "
+                  "(longest %u)%s",
+                  (unsigned)f.modelFrames, (unsigned)lv_tick_elaps(f.modelStatsTick), (unsigned)(f.modelDrawUs / n),
+                  (unsigned)(modelDirtyPx / n), (unsigned)modelRefreshes, (unsigned)(modelRefreshUs / r),
+                  (unsigned)modelRefreshMaxUs, modelFast ? ", fast buffer" : "");
         f.modelFrames = f.modelDrawUs = 0;
+        modelRefreshes = modelRefreshUs = modelRefreshMaxUs = modelDirtyPx = 0;
         f.modelStatsTick = lv_tick_get();
     }
 }
