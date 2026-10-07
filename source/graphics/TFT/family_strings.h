@@ -34,7 +34,7 @@
 #define FAMILY_STR_WELCOME_SKIP "OVERSLAAN"
 #define FAMILY_STR_WELCOME_HELLO "ZEG HALLO"
 #define FAMILY_STR_WELCOME_T1 "WELKOM"
-#define FAMILY_STR_WELCOME_B1 "Dit is jouw VOXLnet. Het heet:"
+#define FAMILY_STR_WELCOME_B1 "Dit apparaat heet:" // one line in the column beside the model
 #define FAMILY_STR_WELCOME_A1 "Zo zien de anderen jouw berichten."
 #define FAMILY_STR_WELCOME_T2 "LEZEN"
 #define FAMILY_STR_WELCOME_B2 "Op het beginscherm zie je of er nieuwe berichten zijn. Tik op LEZEN, veeg om te bladeren, en tik op TERUG om terug te gaan."

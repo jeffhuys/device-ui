@@ -25,7 +25,9 @@
 #include <Wire.h>
 #endif
 #if defined(ARCH_ESP32)
+#include "esp_heap_caps.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "hal/cpu_hal.h"
 #include "hal/gpio_ll.h"
 #endif
@@ -55,6 +57,10 @@ LV_IMAGE_DECLARE(family_wordmark_16);
 constexpr const char *c_markerFile = "/family_read.bin";      // last-read marker, next to /messages
 constexpr const char *c_welcomeFile = "/family_welcome.done"; // the welcome was finished; provision.py deletes it
 constexpr int c_welcomeSteps = 5;
+constexpr int32_t c_modelW = 112, c_modelH = 150; // the wireframe's canvas, at the right of page 1
+constexpr uint32_t c_modelPeriodMs = 50;          // 20 frames a second, while page 1 shows
+
+void familyModelDraw(uint16_t *buf, int w, int h, uint32_t ms, int *x0, int *y0, int *x1, int *y1); // FamilyModel.cpp
 constexpr uint32_t c_markerMagic = 0x464d5231;           // "FMR1"
 constexpr uint32_t c_chordHoldMs = 1000;                 // trackball held before P counts
 #ifndef FAMILY_DEV_IDLE_MS
@@ -752,6 +758,8 @@ void FamilyScreen::hide(void)
 void FamilyScreen::showPage(Page p)
 {
     page = p;
+    if (p != eWelcome)
+        stopModel();
     lv_obj_t *pages[4] = {homePage, readPage, sendPage, welcomePage};
     for (int i = 0; i < 4; i++) {
         if (i == p)
@@ -1146,6 +1154,7 @@ void FamilyScreen::buildWelcome(void)
     lv_obj_set_align(welcomeCount, LV_ALIGN_RIGHT_MID);
 
     lv_obj_t *content = createPlain(welcomePage);
+    welcomeContent = content;
     lv_obj_set_width(content, lv_pct(100));
     lv_obj_set_flex_grow(content, 1);
     lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
@@ -1174,6 +1183,13 @@ void FamilyScreen::buildWelcome(void)
     lv_obj_clear_flag(welcomeCard, lv_obj_flag_t(LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLL_ON_FOCUS));
     lv_label_set_text(lv_obj_get_child(lv_obj_get_child(welcomeCard, 0), 0), FAMILY_STR_ME);
     welcomeCardLabel = lv_obj_get_child(welcomeCard, 1);
+
+    // the wireframe: outside the column's flow, top right under the strip; its buffer comes with page 1
+    welcomeModel = lv_canvas_create(welcomePage);
+    lv_obj_add_flag(welcomeModel, lv_obj_flag_t(LV_OBJ_FLAG_FLOATING | LV_OBJ_FLAG_HIDDEN));
+    lv_obj_clear_flag(welcomeModel, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(welcomeModel, c_modelW, c_modelH);
+    lv_obj_align(welcomeModel, LV_ALIGN_TOP_RIGHT, 0, c_barHeight + c_gap);
 
     // OVERSLAAN left, VERDER right
     lv_obj_t *buttons = createPlain(welcomePage);
@@ -1258,6 +1274,10 @@ void FamilyScreen::showWelcomeStep(int step)
     }
     lv_label_set_text(welcomeBody, body);
 
+    if (step == 0)
+        startModel();
+    else
+        stopModel();
     if (step == 0) {
         char upperName[48];
         snprintf(upperName, sizeof(upperName), "%s", name);
@@ -1285,6 +1305,7 @@ void FamilyScreen::showWelcomeStep(int step)
 void FamilyScreen::finishWelcome(bool sayHello)
 {
     welcomeDone = true;
+    freeModel();
     File file = persistentFS.open(c_welcomeFile, FILE_WRITE);
     if (file) {
         file.write((const uint8_t *)"1", 1);
@@ -1302,6 +1323,109 @@ void FamilyScreen::finishWelcome(bool sayHello)
         openRead(false);
     } else {
         goHome();
+    }
+}
+
+/**
+ * Page 1 shows the model at its right and the text in a narrower column beside it. The buffer is
+ * taken when the page first shows (internal RAM if it can be had, it renders several times faster
+ * than PSRAM) and given back when the welcome finishes.
+ */
+void FamilyScreen::startModel(void)
+{
+    if (!modelBuf) {
+        size_t size = (size_t)c_modelW * c_modelH * sizeof(uint16_t);
+#if defined(ARCH_ESP32)
+        modelBuf = (uint16_t *)heap_caps_aligned_alloc(LV_DRAW_BUF_ALIGN, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (!modelBuf)
+            modelBuf = (uint16_t *)heap_caps_aligned_alloc(LV_DRAW_BUF_ALIGN, size, MALLOC_CAP_SPIRAM);
+#else
+        modelBuf = (uint16_t *)malloc(size);
+#endif
+        if (!modelBuf) {
+            ILOG_WARN("family: no memory for the welcome model");
+            return;
+        }
+        memset(modelBuf, 0, size);
+        lv_canvas_set_buffer(welcomeModel, modelBuf, c_modelW, c_modelH, LV_COLOR_FORMAT_RGB565);
+    }
+    lv_obj_set_width(welcomeContent, lv_display_get_horizontal_resolution(nullptr) - 2 * c_gap - c_modelW - 4);
+    lv_obj_clear_flag(welcomeModel, LV_OBJ_FLAG_HIDDEN);
+    if (!modelTimer)
+        modelTimer = lv_timer_create(timer_model, c_modelPeriodMs, nullptr);
+    lv_timer_resume(modelTimer);
+    if (!modelRunning) {
+        modelRunning = true;
+        modelStartTick = lv_tick_get();
+        modelFrames = modelDrawUs = 0;
+        modelStatsTick = modelStartTick;
+    }
+}
+
+void FamilyScreen::stopModel(void)
+{
+    if (modelTimer)
+        lv_timer_pause(modelTimer);
+    modelRunning = false;
+    if (welcomeModel)
+        lv_obj_add_flag(welcomeModel, LV_OBJ_FLAG_HIDDEN);
+    if (welcomeContent)
+        lv_obj_set_width(welcomeContent, lv_pct(100));
+}
+
+void FamilyScreen::freeModel(void)
+{
+    stopModel();
+    if (modelTimer) {
+        lv_timer_delete(modelTimer);
+        modelTimer = nullptr;
+    }
+    if (modelBuf) {
+        lv_canvas_set_buffer(welcomeModel, nullptr, 0, 0, LV_COLOR_FORMAT_RGB565);
+#if defined(ARCH_ESP32)
+        heap_caps_free(modelBuf);
+#else
+        free(modelBuf);
+#endif
+        modelBuf = nullptr;
+    }
+}
+
+void FamilyScreen::timer_model(lv_timer_t *)
+{
+    if (!family || !family->modelBuf)
+        return;
+    FamilyScreen &f = *family;
+    // only while it can be seen: the welcome's first page, on the loaded screen, not dimmed away
+    if (!f.shown || f.page != eWelcome || f.welcomeStep != 0 || !f.mainScreenActive || f.screenSaverActive())
+        return;
+#if defined(ARCH_ESP32)
+    int64_t us0 = esp_timer_get_time();
+#endif
+    int x0, y0, x1, y1;
+    familyModelDraw(f.modelBuf, c_modelW, c_modelH, lv_tick_elaps(f.modelStartTick), &x0, &y0, &x1, &y1);
+#if defined(ARCH_ESP32)
+    f.modelDrawUs += (uint32_t)(esp_timer_get_time() - us0);
+#endif
+    // redraw what this frame and the last one covered, not the whole canvas
+    lv_area_t now = {x0, y0, x1, y1}, dirty = now;
+    if (f.modelDirty.x2 >= f.modelDirty.x1)
+        dirty = x1 >= x0 ? lv_area_t{LV_MIN(x0, f.modelDirty.x1), LV_MIN(y0, f.modelDirty.y1), LV_MAX(x1, f.modelDirty.x2),
+                                     LV_MAX(y1, f.modelDirty.y2)}
+                         : f.modelDirty;
+    f.modelDirty = now;
+    if (dirty.x2 >= dirty.x1) {
+        lv_area_t coords;
+        lv_obj_get_coords(f.welcomeModel, &coords);
+        lv_area_move(&dirty, coords.x1, coords.y1);
+        lv_obj_invalidate_area(f.welcomeModel, &dirty);
+    }
+    f.modelFrames++;
+    if (lv_tick_elaps(f.modelStatsTick) >= 10000) {
+        ILOG_INFO("family: welcome model, %u frames in %u ms, drawing %u us a frame", (unsigned)f.modelFrames,
+                  (unsigned)lv_tick_elaps(f.modelStatsTick), (unsigned)(f.modelFrames ? f.modelDrawUs / f.modelFrames : 0));
+        f.modelFrames = f.modelDrawUs = 0;
+        f.modelStatsTick = lv_tick_get();
     }
 }
 

@@ -175,7 +175,9 @@ void FamilyScreen::simFrame(lv_display_t *disp, const lv_area_t *area, const uin
 {
     if (!framesDir || !family || !family->bootStartTick)
         return;
-    if (!family->booting && lv_tick_elaps(family->bootEndTick) > 600)
+    // the boot animation until 600 ms after its end, and the welcome's model while it turns
+    bool model = family->modelRunning;
+    if (!model && !family->booting && lv_tick_elaps(family->bootEndTick) > 600)
         return;
     lv_color_format_t cf = lv_display_get_color_format(disp);
     uint32_t size = lv_color_format_get_size(cf);
@@ -200,7 +202,8 @@ void FamilyScreen::simFrame(lv_display_t *disp, const lv_area_t *area, const uin
     if (!lv_display_flush_is_last(disp))
         return;
     char path[512];
-    snprintf(path, sizeof(path), "%s/f%04u_%05u.ppm", framesDir, (unsigned)frameNo++, (unsigned)lv_tick_elaps(family->bootStartTick));
+    snprintf(path, sizeof(path), "%s/%s%04u_%05u.ppm", framesDir, model ? "m" : "f", (unsigned)frameNo++,
+             (unsigned)lv_tick_elaps(model ? family->modelStartTick : family->bootStartTick));
     if (FILE *f = fopen(path, "wb")) {
         fprintf(f, "P6\n320 240\n255\n");
         fwrite(frame, 1, sizeof(frame), f);

@@ -124,6 +124,11 @@ class FamilyScreen
     void addWelcomeReplayButton(void);
     static void ui_event_welcome(lv_event_t *e);
     static void ui_event_welcome_replay(lv_event_t *e);
+    // the turning wireframe of the device on the welcome's first page (FamilyModel.cpp draws it)
+    void startModel(void);
+    void stopModel(void);
+    void freeModel(void);
+    static void timer_model(lv_timer_t *timer);
 
     // theme (FamilyTheme.cpp): the VOXL black and white over all of MUI
     void installTheme(void);
@@ -205,6 +210,14 @@ class FamilyScreen
     lv_obj_t *welcomeSkip = nullptr;
     lv_obj_t *welcomeNext = nullptr;
     lv_obj_t *welcomeNextLabel = nullptr;
+    lv_obj_t *welcomeContent = nullptr;   // the text column; narrower on page 1, beside the model
+    lv_obj_t *welcomeModel = nullptr;     // canvas with the wireframe
+    uint16_t *modelBuf = nullptr;
+    lv_timer_t *modelTimer = nullptr;
+    bool modelRunning = false;
+    uint32_t modelStartTick = 0;
+    lv_area_t modelDirty{0, 0, -1, -1}; // what the last frame drew, canvas coordinates
+    uint32_t modelFrames = 0, modelDrawUs = 0, modelStatsTick = 0;
     lv_obj_t *bootObj = nullptr;      // the boot animation, above everything on the main screen
     lv_timer_t *bootTimer = nullptr;
     lv_group_t *bootGroup = nullptr;  // empty: keys during the boot animation go nowhere
