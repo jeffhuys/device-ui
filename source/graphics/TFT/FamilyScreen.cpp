@@ -58,7 +58,7 @@ constexpr const char *c_markerFile = "/family_read.bin";      // last-read marke
 constexpr const char *c_welcomeFile = "/family_welcome.done"; // the welcome was finished; provision.py deletes it
 constexpr int c_welcomeSteps = 5;
 constexpr int32_t c_modelW = 112, c_modelH = 150; // the wireframe's canvas, at the right of page 1
-constexpr uint32_t c_modelPeriodMs = 33;          // 30 frames a second, while page 1 shows
+constexpr uint32_t c_modelPeriodMs = 25;          // up to 40 frames a second, while page 1 shows (a refresh takes ~9 ms)
 constexpr uint32_t c_modelRefrMs = 15;            // the display's refresh timer meanwhile (LVGL's default: 40 ms)
 void familyFastBuffer(bool on);                   // FamilyBoot.cpp: the internal-RAM draw buffer
 static uint32_t modelRefreshes = 0, modelRefreshUs = 0, modelRefreshMaxUs = 0, modelDirtyPx = 0;

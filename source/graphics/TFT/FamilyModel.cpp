@@ -221,8 +221,10 @@ void familyModelDraw(uint16_t *buf, int w, int h, uint32_t ms, int *x0, int *y0,
     const float tilt = 0.32f + 0.05f * sinf(2 * turn);                   // about 18 degrees, two breaths a turn
     View v{cosf(turn), sinf(turn), cosf(tilt), sinf(tilt)};
 
-    // a camera 300 units in front, the model scaled to fill the height
-    const float camera = 300, scale = (h - 6) / (2 * c_halfH + 16), cx = w / 2.0f, cy = h / 2.0f;
+    // a camera 300 units in front, the model scaled to fill the height. Over a turn the tilt and the
+    // perspective take the bottom corners further from the centre (76 px) than the top ones (70 px):
+    // centred, the side view lost its bottom pixel row. Worked out over a full turn, 3 px up centres it.
+    const float camera = 300, scale = (h - 6) / (2 * c_halfH + 16), cx = w / 2.0f, cy = h / 2.0f - 3;
     bool visible[c_faces];
     for (int f = 0; f < c_faces; f++) {
         V3 n = rotate(v, faceNormal[f]), c = rotate(v, faceCentre[f]);
