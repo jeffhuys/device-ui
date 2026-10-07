@@ -16,7 +16,6 @@
 // solid when one of its two faces is visible and dotted when neither is; the screen, keys and the
 // other details are drawn only while their face is visible.
 
-#include "graphics/view/TFT/FamilyScreen.h"
 #include "lvgl.h"
 #include <cmath>
 #include <cstring>
@@ -29,7 +28,7 @@ struct V3 {
 
 // faces: front, back, and the eight sides of the outline (side i runs from outline point i to i + 1)
 constexpr int c_front = 0, c_back = 1, c_side0 = 2, c_faces = 10;
-constexpr uint16_t bit(int face)
+constexpr uint16_t faceBit(int face)
 {
     return (uint16_t)(1u << face);
 }
@@ -69,17 +68,17 @@ void add(V3 a, V3 b, uint16_t faces, Kind kind)
 void frontRect(float sx, float sy, float w, float h, float inset = 0, float z = c_halfD)
 {
     float x0 = X(sx + inset), x1 = X(sx + w - inset), y0 = Y(sy + inset), y1 = Y(sy + h - inset);
-    add({x0, y0, z}, {x1, y0, z}, bit(c_front), eDetail);
-    add({x1, y0, z}, {x1, y1, z}, bit(c_front), eDetail);
-    add({x1, y1, z}, {x0, y1, z}, bit(c_front), eDetail);
-    add({x0, y1, z}, {x0, y0, z}, bit(c_front), eDetail);
+    add({x0, y0, z}, {x1, y0, z}, faceBit(c_front), eDetail);
+    add({x1, y0, z}, {x1, y1, z}, faceBit(c_front), eDetail);
+    add({x1, y1, z}, {x0, y1, z}, faceBit(c_front), eDetail);
+    add({x0, y1, z}, {x0, y0, z}, faceBit(c_front), eDetail);
 }
 
 void octagon(float cx, float cy, float r, float z)
 {
     for (int i = 0; i < 8; i++) {
         float a0 = (i + 0.5f) * (float)M_PI / 4, a1 = (i + 1.5f) * (float)M_PI / 4;
-        add({cx + r * cosf(a0), cy + r * sinf(a0), z}, {cx + r * cosf(a1), cy + r * sinf(a1), z}, bit(c_front), eDetail);
+        add({cx + r * cosf(a0), cy + r * sinf(a0), z}, {cx + r * cosf(a1), cy + r * sinf(a1), z}, faceBit(c_front), eDetail);
     }
 }
 
@@ -101,9 +100,9 @@ void build(void)
         faceNormal[c_side0 + i] = {-dy / len, dx / len, 0}; // outward for a clockwise outline
         faceCentre[c_side0 + i] = {(p.x + q.x) / 2, (p.y + q.y) / 2, 0};
         int prev = c_side0 + (i + 7) % 8, side = c_side0 + i;
-        add({p.x, p.y, d}, {q.x, q.y, d}, bit(c_front) | bit(side), eBody);
-        add({p.x, p.y, -d}, {q.x, q.y, -d}, bit(c_back) | bit(side), eBody);
-        add({p.x, p.y, d}, {p.x, p.y, -d}, bit(prev) | bit(side), eBody);
+        add({p.x, p.y, d}, {q.x, q.y, d}, faceBit(c_front) | faceBit(side), eBody);
+        add({p.x, p.y, -d}, {q.x, q.y, -d}, faceBit(c_back) | faceBit(side), eBody);
+        add({p.x, p.y, d}, {p.x, p.y, -d}, faceBit(prev) | faceBit(side), eBody);
     }
 
     // screen: the bezel, the display, and on it the family home screen's three rows (the first with its badge)
@@ -117,10 +116,10 @@ void build(void)
     // the band with the trackball: chevrons pointing in, the ball standing a little proud
     const float chevron[3] = {10, 15, 20};
     for (float cx : chevron) {
-        add({X(cx), Y(64), d}, {X(cx + 3), Y(67), d}, bit(c_front), eDetail);
-        add({X(cx + 3), Y(67), d}, {X(cx), Y(70), d}, bit(c_front), eDetail);
-        add({X(80 - cx), Y(64), d}, {X(77 - cx), Y(67), d}, bit(c_front), eDetail);
-        add({X(77 - cx), Y(67), d}, {X(80 - cx), Y(70), d}, bit(c_front), eDetail);
+        add({X(cx), Y(64), d}, {X(cx + 3), Y(67), d}, faceBit(c_front), eDetail);
+        add({X(cx + 3), Y(67), d}, {X(cx), Y(70), d}, faceBit(c_front), eDetail);
+        add({X(80 - cx), Y(64), d}, {X(77 - cx), Y(67), d}, faceBit(c_front), eDetail);
+        add({X(77 - cx), Y(67), d}, {X(80 - cx), Y(70), d}, faceBit(c_front), eDetail);
     }
     octagon(X(40), Y(67), 5, d);
     octagon(X(40), Y(67), 3, d + 2);
@@ -137,10 +136,10 @@ void build(void)
     // the edges: switch on the right side (side 2), reset on the left (side 6), USB-C on the bottom (side 4)
     const int right = c_side0 + 2, left = c_side0 + 6, bottom = c_side0 + 4;
     auto sideRect = [](V3 a, V3 b, V3 cc, V3 dd, int face) {
-        add(a, b, bit(face), eDetail);
-        add(b, cc, bit(face), eDetail);
-        add(cc, dd, bit(face), eDetail);
-        add(dd, a, bit(face), eDetail);
+        add(a, b, faceBit(face), eDetail);
+        add(b, cc, faceBit(face), eDetail);
+        add(cc, dd, faceBit(face), eDetail);
+        add(dd, a, faceBit(face), eDetail);
     };
     sideRect({w, Y(54), 2}, {w, Y(54), -2}, {w, Y(62), -2}, {w, Y(62), 2}, right);
     sideRect({-w, Y(44), 1.5f}, {-w, Y(44), -1.5f}, {-w, Y(49), -1.5f}, {-w, Y(49), 1.5f}, left);
@@ -233,7 +232,7 @@ void familyModelDraw(uint16_t *buf, int w, int h, uint32_t ms, int *x0, int *y0,
         const Edge &e = edges[i];
         bool seen = false;
         for (int f = 0; f < c_faces; f++)
-            if ((e.faces & bit(f)) && visible[f])
+            if ((e.faces & faceBit(f)) && visible[f])
                 seen = true;
         if (!seen && e.kind == eDetail)
             continue;
